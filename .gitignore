@@ -11,8 +11,10 @@ doc/resources/
 doc/*.css
 doc/package-list
 frege/compiler/Grammar.fr
+frege/Version.fr
 y.*
 FregIDE/src/frege/IO.java
+FregIDE/src/frege/Version.java
 FregIDE/src/frege/List.java
 FregIDE/src/frege/MD.java
 FregIDE/src/frege/Prelude.java
