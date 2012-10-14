@@ -1,0 +1,16 @@
+package frege.control.monad.Cont where
+
+import frege.data.wrapper.Identity
+
+data ContT m a = ContT { run :: forall r. (a -> m r) -> m r }
+
+type Cont a = ContT Identity a
+
+instance Monad (ContT m) where
+  fmap f (ContT k) = ContT (\d -> k (d . f))
+
+  return a = ContT (\k -> k a)
+
+  ContT kf <*> ContT ka = ContT (\k -> kf (\f -> ka (\a -> k (f a))))
+
+  ContT k >>= f = ContT (\d -> k (\a -> (f a).run d))

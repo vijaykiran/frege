@@ -1,10 +1,12 @@
 package frege.control.monad.lazy.State where
 
+import frege.Prelude hiding (State(..))
+
 import frege.data.wrapper.Identity
 
 data StateT s m a = StateT { run :: s -> m (a, s) }
 
--- type State s a = StateT s Identity a
+type State s a = StateT s Identity a
 
 instance Functor Functor m => (StateT s m) where
   fmap f (StateT k) = StateT (\s -> fmap (\(a, s) -> (f a, s)) (k s))
