@@ -1,6 +1,7 @@
 package frege.control.monad.lazy.State where
 
 import frege.Prelude hiding (State(..))
+import frege.control.monad.MonadTrans
 
 import frege.data.wrapper.Identity
 
@@ -26,3 +27,6 @@ instance Monad Monad m => (StateT s m) where
       go s = do
         (a, s') <- ma s
         (f a).run s' 
+
+instance MonadTrans (StateT s) where
+  lift ma = StateT (\s -> fmap (\a -> (a, s)) ma)

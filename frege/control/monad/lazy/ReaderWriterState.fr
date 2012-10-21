@@ -1,13 +1,14 @@
 package frege.control.monad.lazy.ReaderWriterState where
 
+import frege.control.monad.MonadTrans
 import frege.control.Monoid
 import frege.data.wrapper.Identity
 
-data RWST m e w s a = RWST { run :: e -> s -> m (a, w, s) }
+data RWST e w s m a = RWST { run :: e -> s -> m (a, w, s) }
 
-type RWS e w s a = RWST Identity e w s a
+type RWS e w s a = RWST e w s Identity a
 
-instance Monad (Monoid w, Monad m) => (RWST m e w s) where
+instance Monad (Monoid w, Monad m) => (RWST e w s m) where
   fmap f (RWST k) = RWST (\e \s -> fmap (\(a, w, s) -> (f a, w, s)) (k e s))
 
   return a = RWST (\_ \s -> return (a, mempty, s))
@@ -25,3 +26,6 @@ instance Monad (Monoid w, Monad m) => (RWST m e w s) where
         (a, w, s')   <- ka e s
         (b, w', s'') <- (f a).run e s'
         return (b, w <> w', s'')
+
+instance MonadTrans Monoid w => (RWST e w s) where
+  lift ma = RWST (\_ \s -> fmap (\a -> (a, mempty, s)) ma)

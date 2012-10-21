@@ -1,5 +1,6 @@
 package frege.control.monad.Cont where
 
+import frege.control.monad.MonadTrans
 import frege.data.wrapper.Identity
 
 data ContT m a = ContT { run :: forall r. (a -> m r) -> m r }
@@ -14,3 +15,6 @@ instance Monad (ContT m) where
   ContT kf <*> ContT ka = ContT (\k -> kf (\f -> ka (\a -> k (f a))))
 
   ContT k >>= f = ContT (\d -> k (\a -> (f a).run d))
+
+instance MonadTrans ContT where
+  lift ma = ContT (\(k :: forall a r. a -> r) -> fmap k ma)
