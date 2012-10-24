@@ -1,0 +1,24 @@
+package frege.control.monad.Either where
+
+import frege.control.monad.MonadTrans
+
+data EitherT e m a = EitherT { run :: m (Either e a) }
+
+instance Monad Monad m => (EitherT e m) where
+  fmap f (EitherT m) = EitherT (fmap (fmap f) m)
+
+  return a = EitherT (return (Right a))
+
+  EitherT mf <*> EitherT ma = EitherT ((<*>) <$> mf <*> ma)
+
+  EitherT ma >>= f = EitherT go
+    where
+      go = do
+        o <- ma
+        case o of
+          Left  e -> return (Left e)
+          Right a -> (f a).run
+
+instance MonadTrans (EitherT e) where
+  lift ma = EitherT (fmap (Right) ma)
+

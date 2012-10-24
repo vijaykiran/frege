@@ -9,6 +9,9 @@ data StateT s m a = StateT { run :: s -> m (a, s) }
 
 type State s a = StateT s Identity a
 
+runState :: StateT s Identity a -> s -> (a, s)
+runState st = Identity.run . st.run
+
 instance Functor Functor m => (StateT s m) where
   fmap f (StateT k) = StateT (\s -> fmap (\(a, s) -> (f a, s)) (k s))
 

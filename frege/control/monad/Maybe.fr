@@ -1,0 +1,25 @@
+package frege.control.monad.Maybe where
+
+import frege.control.monad.MonadTrans
+
+data MaybeT m a = MaybeT { run :: m (Maybe a) }
+
+instance Monad Monad m => (MaybeT m) where
+  fmap f (MaybeT m) = MaybeT (fmap (fmap f) m)
+  
+  return a = MaybeT (return (Just a))
+  
+  MaybeT mf <*> MaybeT ma = MaybeT ((<*>) <$> mf <*> ma) 
+
+  MaybeT ma >>= f = MaybeT go
+    where
+      go = do
+        o <- ma
+        case o of
+          Just a -> (f a).run
+          _      -> return Nothing
+
+instance MonadTrans MaybeT where
+  lift ma = MaybeT (fmap (Just) ma)
+
+

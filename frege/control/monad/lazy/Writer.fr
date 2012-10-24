@@ -8,6 +8,9 @@ data WriterT w m a = WriterT { run :: m (a, w) }
 
 type Writer w a = WriterT w Identity a
 
+runWriter :: WriterT w Identity a -> (a, w)
+runWriter = Identity.run . WriterT.run
+
 instance Monad (Monoid w, Monad m) => (WriterT w m) where
   fmap f (WriterT m) = WriterT (fmap (\(a, w) -> (f a, w)) m)
 

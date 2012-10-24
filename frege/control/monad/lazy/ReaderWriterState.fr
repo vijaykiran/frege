@@ -8,6 +8,9 @@ data RWST e w s m a = RWST { run :: e -> s -> m (a, w, s) }
 
 type RWS e w s a = RWST e w s Identity a
 
+runRWS :: RWS e w s a -> e -> s -> (a, w, s)
+runRWS st e s = (st.run e s).run 
+
 instance Monad (Monoid w, Monad m) => (RWST e w s m) where
   fmap f (RWST k) = RWST (\e \s -> fmap (\(a, w, s) -> (f a, w, s)) (k e s))
 
