@@ -1,0 +1,52 @@
+{--
+    It was observed that the 3 year numbers 2013, 2014 and 2015 
+    each have 3 prime factors that are pairwise different.
+    
+    The question was raised when this will happen next time.
+    -}
+    
+module examples.YearNumbers where
+
+import Data.List
+import examples.EulerLib
+
+type Zahl = Integer
+type Faktoren = [Zahl]
+type Zerlegung = (Zahl, [Zahl])
+type Tripel = (Zerlegung, Zerlegung, Zerlegung)
+
+triple :: Zahl -> Faktoren -> [Tripel] 
+triple a ufa
+    | k <- length ufa, k > 0
+    = case uniqfactors b of
+        ufb | k == length ufb 
+            = case uniqfactors c of
+                ufc | k == length ufc  
+                    = ((a, ufa), (b, ufb), (c, ufc)) : triple b ufb
+                    | otherwise = triple c ufc
+            | otherwise = triple b ufb 
+    | otherwise         = triple b (uniqfactors b)
+    where
+        b = succ a
+        c = succ b
+        uniqfactors :: Zahl -> Faktoren
+        uniqfactors z | z > one = uniq (loop primes z)
+                      | otherwise = []
+            where
+                loop :: Faktoren -> Zahl -> Faktoren
+                loop (p:ps) z
+                    | p*p > z = [z]
+                    | z `rem` p == zero = p : loop (p:ps) (z `quot` p)
+                    | otherwise = loop ps z
+                loop [] _ = []
+                uniq :: Faktoren -> Faktoren 
+                uniq (a:(xs@b:_))
+                    | a==b = []
+                    | ys <- uniq xs = if null ys then ys else a:ys
+                uniq xs     = xs
+
+main _ = mapM_ println result  
+    where 
+        result = (take 1 . filter (ab 5) . triple 2n) [2n]
+        ab :: Int -> Tripel -> Bool
+        ab n ((_, xs), _, _) = n <= length xs

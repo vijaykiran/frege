@@ -38,20 +38,7 @@
  * This is pass 3 of the frege compiler, imlemented in 'pass'.
  -}
 
-{-
- * $Author$
- * $Revision$
- * $Date$
- * $Id$
- -}
-
 package frege.compiler.Enter where
-
---- This is $Revision$
-protected version = v "$Revision$" where
-    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
-    v _ = 0
-
 
 import frege.List (Tree, keys, values, insertkv)
 import Data.List  as DL(uniqBy, sort, sortBy)
@@ -117,17 +104,18 @@ chgddef (d@DatDcl {pos}) = do
                 in [ d | (f,p) <- fields, d <- gen g p dsym.name cons f]
         work _ _ = error "work: need a SymT"
         gen :: Global -> Position -> QName -> [Symbol] -> String -> [DefinitionS]
-        gen g pos tname cons f = let
-                model = FunDcl {vis=Public, poss = [pos], name="", pats=[pvar "this"], expr = var "x", doc=Nothing}
+        gen g fpos tname cons f = let
+                pos   = fpos.{first <- Token.{offset <- succ}}
+                model = FunDcl {vis=Public, poss = [fpos], name="", pats=[pvar "this"], expr = var "x", doc=Nothing}
                 symf =  model.{name = f, expr = getExpr,
                                 doc = getdoc}   -- Just ("access field @" ++ f ++ "@")}
-                symu =  model.{name = "upd$" ++ f, expr = updExpr,
+                symu =  model.{name = "upd$" ++ f, expr = updExpr,  poss = [pos],
                                 pats=[pvar "this", pvar "that"],
                                 doc = Just ("update field @" ++ f ++ "@")}
-                symc =  model.{name = "chg$" ++ f, expr = chgExpr,
+                symc =  model.{name = "chg$" ++ f, expr = chgExpr,  poss = [pos], 
                                 pats=[pvar "this", pvar "that"],
                                 doc = Just ("change field @" ++ f ++ "@")}
-                symh =  model.{name = "has$" ++ f, expr = hasExpr,
+                symh =  model.{name = "has$" ++ f, expr = hasExpr,  poss = [pos],
                                 doc = Just ("check if constructor has field @" ++ f ++ "@")}
                 -- -------------- utility functions ---------------
                 -- get the doc for field f
@@ -146,7 +134,7 @@ chgddef (d@DatDcl {pos}) = do
                 -- displayed name of a constructor
                 cname sym = case Symbol.name sym of
                     MName tn base -> With1 pos.first.{tokid=CONID, value=tn.base}
-                                           pos.first.{tokid=CONID,value=base}
+                                           pos.first.{tokid=CONID, value=base}
                     _ -> error "constructor must be a member"
                 -- [PVar c1, PVar c2, PVar c3, ...]
                 -- subpats "_" = repeat (PVar {name="_",pos})
@@ -157,7 +145,7 @@ chgddef (d@DatDcl {pos}) = do
                     where pats = take (arity con) (subpats s)
                 reppat v (pcon@PCon {}) = pcon.{pats <- map sv}
                     where
-                        sv (p@PVar {var}) | var == v = PStrict p
+                        -- sv (p@PVar {var}) | var == v = PUser{pat=p, lazy=false}
                         sv p = p
                 reppat v p = p
                 -- construct simple (pattern) variables
@@ -193,7 +181,7 @@ chgddef (d@DatDcl {pos}) = do
                     | otherwise = Case CNoWarn this (hasAlts ++ [last]) Nothing
                 hasAlts = [ CAlt {pat=conpat con "_", ex = vTrue}
                                                         | con <- cons, v <- occurs con f]
-                last = CAlt {pat=pvar "no", ex = vFalse}
+                last = CAlt {pat=pvar "_", ex = vFalse}
             in [symf, symu, symc, symh]
 chgddef d = stio d      -- leave others unchanged
 
@@ -218,7 +206,7 @@ post = do
     stio true
 
 transTVar :: TauS -> Tau
-transTVar (TVar {var,pos}) = TVar {var,pos}
+transTVar (TVar {var,pos,kind}) = TVar {var,pos,kind}
 transTVar _ = error "transTVar: no TVar"
 
 
@@ -252,7 +240,7 @@ enter1 fname (d@ClaDcl {pos}) = do
         changeST Global.{sub <-
             SubSt.{idKind <- insertkv (KeyTk pos.first) (Right tname)}}
         U.enter (SymC {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=tname,
-                       tau=transTVar d.clvar, vkind=0, supers=[], insts=[], env=Nil})
+                       tau=transTVar d.clvar, supers=[], insts=[], env=Nil})
 
         let vdefs = map Definition.{vis <- max d.vis} d.defs
             xdefs = filter ((>d.vis) • Definition.vis) d.defs
@@ -289,7 +277,7 @@ enter1 !fname (!d@InsDcl {pos=!pos}) = do
                  sid=0, clas=fname "", typ=pSigma, env=Nil})
         enter (MName tname) d.defs
 
-        !typ  <- U.transSigmaP true d.typ
+        !typ  <- U.transSigma d.typ
         !clas <- U.defaultXName (Pos d.clas.id d.clas.id) (TName pPreludeBase "Eq") d.clas
 
         case U.instTSym typ g of
@@ -399,14 +387,15 @@ enter1 fname (d@AnnDcl {pos}) = do
 enter1 fname (d@DatDcl {pos}) = do
         g <- getST
         let dname = TName g.thisPack d.name
+            kind  = foldr KApp KType dsig.kinds
             dtcon = TCon {pos=d.pos, name=dname}
             dtau  = if null d.vars then dtcon else dtcon.mkapp (map transTVar d.vars)
             drho  = RhoTau [] dtau
-            dsig  = ForAll (map Tau.var d.vars)
-            dsym  = SymT {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=dname, typ=dsig drho,
+            dsig  = ForAll (map Tau.varkind d.vars) drho
+            dsym  = SymT {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=dname, typ=dsig,
                             product = length d.ctrs == 1,
                             enum = null d.vars && all (0==) (map (length • DCon.flds) d.ctrs),
-                            nativ = Nothing, pur = false,
+                            nativ = Nothing, pur = false, kind,
                             newt = length d.ctrs == 1 && 1 == (length • DCon.flds • head) d.ctrs,
                             env=Nil}
         U.enter dsym
@@ -426,13 +415,13 @@ enter1 fname (d@DatDcl {pos}) = do
             let fs = map ConField.{typ = pSigma} dcon.flds  -- zip (map fst dcon.flds) (repeat pSigma)
                 fnms = [ n | Field {name = Just n} <- dcon.flds ]
                 fnps = [ (p, n) | Field {pos=p, name = Just n} <- dcon.flds ]
-                ssig = S (take (length dcon.flds) allStrict)
+                ssig = S [ if ConField.strict f then S[] else U | f <- dcon.flds]
                 !cqname = mname dcon.name
                 register (p, n) = changeST Global.{sub <- SubSt.{
                     idKind <- insertkv (KeyTk (Position.first p)) (Right (mname n))}}
             foreach fnms (checkunique dcon.pos (mname dcon.name) fnms)
             U.enter (SymD {name = mname dcon.name, typ=pSigma, flds = fs,
-                cid=cid, sid=0, strsig = if dcon.strict then ssig else U,
+                cid=cid, sid=0, strsig = ssig,
                 pos=dcon.pos, vis=dcon.vis, doc=dcon.doc})
             changeST Global.{
                 sub <- SubSt.{
@@ -455,10 +444,14 @@ enter1 fname (d@JavDcl {pos}) = do
         let !dname = TName g.thisPack d.name
             dtcon = TCon {pos=d.pos, name=dname}
             dtau  = dtcon.mkapp (map transTVar d.vars)
+            primitive = d.jclas `elem` primitiveTypes
+            ktype = if primitive then KType else KGen
+            kind  = foldr KApp ktype dsig.kinds 
+            dsig  = ForAll (map Tau.varkind d.vars) (RhoTau [] dtau)
         U.enter (SymT {sid=0, pos=d.pos, vis=d.vis, doc=d.doc, name=dname,
                        product = false, enum = false, newt = false, pur = d.isPure,
-                       typ=ForAll (map Tau.var d.vars) (RhoTau [] dtau),
-                       nativ = Just d.jclas, env=Nil})
+                       typ=dsig,
+                       kind, nativ = Just d.jclas, env=Nil})
         changeST Global.{
             sub <- SubSt.{
                 idKind <- insertkv (KeyTk pos.first) (Right dname)}}
@@ -467,11 +460,12 @@ enter1 fname (d@JavDcl {pos}) = do
 enter1 fname (d@TypDcl {pos}) = do
         g <- getST
         let !dname = TName g.thisPack d.name
+            kind = KVar
         changeST Global.{
             sub <- SubSt.{
                 idKind <- insertkv (KeyTk pos.first) (Right dname)}}
         U.enter (SymA {sid=0, pos=d.pos, vis=d.vis, doc=d.doc,
-                       name = dname, typ = pSigma,
+                       name = dname, typ = pSigma, kind,
                        vars = map transTVar d.vars})
 
 
@@ -483,7 +477,7 @@ deriveInst (d@InsDcl {pos}) = stio d
 deriveInst (d@DrvDcl {pos}) = do
         g <- getST
         clas <- U.defaultXName pos (TName pPreludeBase "Eq") d.clas
-        typ  <- U.transSigmaP true d.typ
+        typ  <- U.transSigma d.typ
         case U.instTSym typ g of
             Just (sym@SymT {env}) | ctrs <- U.envConstructors env,
                                     not (null ctrs) -> do
@@ -504,7 +498,7 @@ deriveInst (d@DrvDcl {pos}) = do
         withDerivedContext pos (ForAll [] rho) clas
             | null rho.context = ForAll [] rho.{context}
             where
-                context = [ Ctx pos clas (TVar pos v) false | v <- U.freeTVars [] rho ]
+                context = [ Ctx pos clas (TVar pos KVar v) false | v <- U.freeTVnames [] rho ]
         withDerivedContext pos sigma clas = sigma
 
 deriveInst d = do

@@ -85,25 +85,29 @@ infixop line op n = if n >= 0 && n < 16
 
 
 --- get flag bit
-flag :: Flag -> Int
-flag f = 1 `bshl` ord f
+flag :: Flag -> Flags
+flag = Flags.singleton
 
 --- @setFlag flags f@ set flag _f_ in _flags_
-setFlag flags f = flags `bor` flag f
+setFlag = Flags.unionE   -- flags f = flags `bor` flag f
 
 --- @flagSet f flags@ set flag _f_ in _flags_
-flagSet f flags = flags `bor` flag f
+flagSet = flip Flags.unionE
 
 --- @clrFlag flags f@ clear flag _f_ in _flags_
-clrFlag flags f = flags `band` (flag f `bxor` (negate 1))
+clrFlag = Flags.differenceE -- flags f = flags `band` (flag f `bxor` (negate 1))
 
 --- check if flag is on
-isOn :: Int -> Flag -> Bool
-isOn flags f = (flags `band` flag f) != 0
+isOn :: Flags -> Flag -> Bool
+isOn flags f = member f flags
 
 --- check if flag is off
-isOff :: Int -> Flag -> Bool
-isOff flags f = (flags `band` flag f) == 0
+isOff :: Flags -> Flag -> Bool
+isOff fs = not . isOn fs
+
+--- tell if the compiler is in strict mode
+strictMode :: Global -> Bool
+strictMode g = isOn g.options.flags STRICT 
 
 --- the path separator used here
 pathSep = fromMaybe ":"  (IO.getProperty "path.separator")
@@ -316,7 +320,7 @@ instance Positioned (PatternT a) where
     is p = "pattern"
     --- get the line number of a pattern
     getpos (PAnn p t)   = (getpos p).merge t.getpos
-    getpos (PStrict p)  = getpos p
+    getpos (PUser{pat})    = getpos pat
     getpos (PCon {pos,pats}) = fold Position.merge pos (map getpos pats)
     getpos (PAt {pos,pat})   = pos.merge pat.getpos
     getpos p | p.{pos?} = p.pos
@@ -389,7 +393,7 @@ showex nicest x global = showprec 17 x where
         | #\.\[\].\:# <- sv = ":"
         | otherwise = sv
         where
-            sv  = nice name global
+            sv  = if nicest then nicer name global else nice name global
 
 
     showprec  n (Con {name,pos,typ}) = showprec  n (Vbl {name,pos,typ})
@@ -516,7 +520,7 @@ instance Nice (Nice q, QNameMatcher q) => PatternT q where
             showp 0 (PLit {kind=LLong, value}) = value ++ "L"
             showp 0 (PLit {kind=LFloat, value}) = value ++ "f"
             showp 0 (PLit {value}) = value
-            showp 0 (PStrict p) = "!" ++ showp 0 p
+            showp 0 (PUser p lazy) = (if lazy then "?" else "!") ++ showp 0 p
             showp 0 p = "(" ++ showp 17 p ++ ")"
             showp 17 (PAnn p t) = showp 15 p ++ "::" ++ t.nice g
             showp 17 p = showp 15 p
@@ -533,10 +537,12 @@ instance Nice (Nice q, QNameMatcher q) => PatternT q where
             showp _  p = Prelude.error ("can't show pattern with constructor" ++ show (constructor p))
 
 instance Nice (Nice t, QNameMatcher t) => SigmaT t where
-    nice (ForAll bndrs rho) g | null bndrs = rho.nice g
-                              | otherwise  = "forall " ++ joined " " bndrs ++ "." ++ rho.nice g
-    nicer (ForAll bndrs rho) g | null bndrs = rho.nicer g
-                              | otherwise  = "forall " ++ joined " " bndrs ++ "." ++ rho.nicer g
+    nice (ForAll bndrs rho) g 
+        | null bndrs = rho.nice g
+        | otherwise  = "forall " ++ (joined " " . map fst) bndrs ++ "." ++ rho.nice g
+    nicer (ForAll bndrs rho) g 
+        | null bndrs = rho.nicer g
+        | otherwise  = "forall " ++ (joined " " . map fst) bndrs ++ "." ++ rho.nicer g
 
 instance Nice (Nice t, QNameMatcher t) => RhoT t where
     nice (RhoFun ctx sigma rho) g
@@ -579,6 +585,10 @@ instance Nice (Nice t, QNameMatcher t) => TauT t where
                 | [TCon {name}, t] <- flat, name.nice g ~ #\[\]$# = "[" ++ showt 2 t ++ "]"
                 | (TCon {name}:ts) <- flat, name.nice g ~ #\(,+\)$# = "(" ++ joined "," (map (showt 2) ts) ++ ")"
                 where flat = t.flat
+            showt 1 fun
+                | [TCon {name}, a, b] <- Tau.flat fun,
+                  name.nice g ~ ´->$´
+                                  = "(" ++ showt 1 a ++ "->" ++ showt 2 b ++ ")"
             showt 1 (TApp a b)    = showt 1 a ++ " " ++ showt 0 b
             showt 1 x             = showt 0 x
             showt 0 (TVar {var})  = var
@@ -628,12 +638,12 @@ instance QNameMatcher QName where
 unAlias :: QNameMatcher a => Global -> TauT a -> Tau
 unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake tau)
     where
-        -- fake (TFun a b)      = TFun (fake a) (fake b)
-        fake (TApp a b)      = TApp (fake a) (fake b)
-        fake TVar{pos,var}   = TVar pos var
+        -- fake (TFun a b)        = TFun (fake a) (fake b)
+        fake (TApp a b)           = TApp (fake a) (fake b)
+        fake TVar{pos,var,kind}   = TVar pos kind var
         fake (Meta x)        = case x.bound.run g of
             (Just tau, _) -> fake tau
-            otherwise     -> TVar Position.null ("t" ++ show x.uid)
+            otherwise     -> TVar Position.null KVar ("t" ++ show x.uid)
         fake TCon{pos,name}  = TCon{pos, name = fakeQName name}
 
         unAlias  tau = case tau of
@@ -652,8 +662,9 @@ unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake
                         _              -> Nothing
                     where
                         rho = typ.rho
+                        vs  = map fst typ.bound
                         aApp :: Tau
-                        aApp = fold TApp (TCon pos name) (map (TVar pos) typ.bound)
+                        aApp = fold TApp (TCon pos name) (map (TVar pos KVar) vs)
 
                 aliased _ _ = Nothing
 
@@ -701,12 +712,12 @@ isTauFun fun g | [TCon {name}, _, _] <- Tau.flat fun, name.nice g ~ ´->$´ = tr
                | otherwise =  false
 
 instance Nice (Nice s, QNameMatcher s) => MetaTvT s where
-    nice (Rigid i s) g = "t" ++ show i ++ "#" ++ s
-    nice (flexi@Flexi i _ s) g
+    nice (Rigid i s _) g = "t" ++ show i ++ "#" ++ s
+    nice (flexi@Flexi i _ s _) g
         | (Just t, _) <- flexi.bound.run g = "<" ++ t.nice g ++ ">"
         | otherwise                                  = "<" ++ show i ++ " " ++ s ++ ">"
-    nicer (Rigid i s) g = "t" ++ show i ++ "#" ++ s     -- "t#" ++ show i
-    nicer (flexi@Flexi i _ _) g
+    nicer (Rigid i s _) g = "t" ++ show i ++ "#" ++ s     -- "t#" ++ show i
+    nicer (flexi@Flexi i _ _ _) g
         | (Just t, _) <- flexi.bound.run g = t.nicer g
         | otherwise                                  = "t" ++ show i
 {- ########### expression and pattern manipulation ############## -}
@@ -768,9 +779,9 @@ instTData _ = Prelude.error "no RhoFun as instance"
 
 {-- a provisional 'Sigma' shared by all 'Symbol's that have no type yet -}
 pSigma :: Sigma
-pSigma =  ForAll [] (RhoTau [] (Meta (Rigid (negate 1) "provisional")))
+pSigma =  ForAll [] (RhoTau [] (Meta (Rigid (negate 1) "provisional" KVar)))
 {-- check if this is the provisional 'Sigma' -}
-isPSigma (ForAll [] (RhoTau [] (Meta (Rigid n          "provisional")))) = n == negate 1
+isPSigma (ForAll [] (RhoTau [] (Meta (Rigid n          "provisional" KVar)))) = n == negate 1
 isPSigma _ = false
 
 {-- create a symbolic link to given qname -}
@@ -1108,12 +1119,17 @@ tsort odeps = result where
 isTName (TName _ _) = true
 isTName _           = false
 
---- return a list of strings that are unbound 'TVar's
---- the first argument is the list of 'TVar's bound outside this rho
-freeTVars bound rho = keys (freeRhoTVars bound Nil rho)
+--- return a list of 'TVar's that are unbound in the type
+--- the first argument is the list of 'TVar' names bound outside this rho
+freeTVars :: [String] -> RhoT a -> [TauT a]
+freeTVars bound rho = values (freeRhoTVars bound Nil rho)
+
+--- like freeTVars, but returns only 'TVar'  names
+freeTVnames :: [String] -> RhoT a -> [String]
+freeTVnames bound rho = keys (freeRhoTVars bound Nil rho)
 
 freeRhoTVars bound collected (RhoFun ctx (ForAll bndleft rho1) rho2) =
-    freeRhoTVars (bndleft ++ bound) (freeRhoTVars bound ctxcoll rho2) rho1
+    freeRhoTVars (map fst bndleft ++ bound) (freeRhoTVars bound ctxcoll rho2) rho1
         where ctxcoll = freeCtxTVars bound collected ctx
 freeRhoTVars bound collected (RhoTau ctx tau) = freeTauTVars bound ctxcoll tau
         where ctxcoll = freeCtxTVars bound collected ctx
@@ -1126,20 +1142,20 @@ freeCtxTVars bnd coll cs = fold ctxTVars coll cs
 
 
 
-freeTauTVars bound collected (TVar _ s)
-    | s `elem` bound = collected
-    | otherwise = collected `including` s
+freeTauTVars bound collected (tv@TVar{var})
+    | var `elem` bound = collected
+    | otherwise = insert collected var tv
 freeTauTVars bound collected (TApp a b)
                 = freeTauTVars bound (freeTauTVars bound collected a) b
 -- freeTauTVars bound collected (TFun a b)
 --                 = freeTauTVars bound (freeTauTVars bound collected a) b
 freeTauTVars _ collected _ = collected
 
--- substSigma :: Tree String (TauT t) ->  SigmaT t -> StG (SigmaT t)
+substSigma :: Tree String (TauT t) ->  SigmaT t -> StG (SigmaT t)
 substSigma t (ForAll bndrs rho) = do
         rho <- substRho t' rho
         stio (ForAll bndrs rho)
-    where t' = fold Tree.delete t bndrs
+    where t' = fold Tree.delete t (map fst bndrs)
 substRho t (RhoFun ctx sig rho) = do
         ctx <- mapSt (substCtx t) ctx
         sig <- substSigma t sig
@@ -1147,9 +1163,9 @@ substRho t (RhoFun ctx sig rho) = do
         stio (RhoFun ctx sig rho)
 substRho t (RhoTau ctx tau) = liftM2 RhoTau (mapSt (substCtx t) ctx) (substTau t tau)
 -- substTau t (TFun a b)       = liftM2 TFun (substTau t a) (substTau t b)
-substTau t (tau@TCon _ _)   = stio tau
+substTau t (tau@TCon{})     = stio tau
 substTau t (TApp a b)       = liftM2 TApp (substTau t a) (substTau t b)
-substTau t (typ@Meta (Flexi n r s)) = do
+substTau t (typ@Meta (Flexi{ref=r})) = do
         bound <- doio (r.get)
         case bound of
             Nothing  = stio typ
@@ -1162,53 +1178,53 @@ substCtx t (x@Ctx {tau}) = do
         tau <- substTau t tau
         stio (x.{tau})
 
-{--
- * Make sure that the type application is indeed a type.
- *
- * If the first arg is @true@, partial applications are allowed.
- -}
-checkTApp :: Bool -> [Tau] -> StG Tau
-checkTApp partial (con:as) = do
-        g <- getST
-        let t = Tau.mkapp con as
-            units   = repeat (TCon {pos=Position.null, name=TName pPreludeBase "()"})  -- for err correction
-        case con of
-            TCon {pos,name} -> case name.findit g of
-                -- Just (SymT {typ=ForAll bs _}) | null as, null bs = stio con
-                Just (SymT {typ=ForAll bs _}) -> if length as <= length bs then stio t  -- no kind errors
-                    else if length as < length bs then if !partial then do
-                        error pos (fill
-                            (break "too few arguments for application of type constructor"
-                                ++ [text (name.nice g) <> text ","]
-                                ++ break "there must be"
-                                ++ [lit (length bs)]))
-                        stio (Tau.mkapp t (take (length bs - length as) units))
-                      else do stio t
-                    else do error pos (fill (break "too many arguments for application of type constructor"
-                                    ++ [text (name.nice g) <> text ","]
-                                    ++ break "at most" ++ [lit (length bs)]
-                                    ++ break "are allowed."))
-                            stio (Tau.mkapp con (take (length bs) as))
-                _ -> fatal (tauPos t) (fill (break "not a type constructor: " ++ [text (name.nice g)]))
-            TVar {pos} -> stio t
-            _ -> fatal (tauPos t) (fill (break "type application of " ++ [text (con.nice g)]))
-checkTApp _ _ = undefined       -- must only be called with tau.flat
-{-
-checkTApp partial (con@TCon {pos,name}) = do
-        g <- getST
-        let units   = repeat (TCon {pos=0, name=TName pPrelude "()"})
-        case name.findit g of
-            Just (SymT {typ=ForAll bs _}) -> if length bs == 0 then stio con
-                    else if !partial && length bs > 0 then do
-                        error pos ("too few arguments for application of type constructor "
-                            ++ name.nice g ++ ", there must be " ++ show (length bs))
-                        stio (Tau.mkapp con (take (length bs) units))
-                    else stio con
-            _ -> fatal (tauPos t) ("not a type constructor: " ++ name.nice g)
-checkTApp t = do
-    g <- getST
-    fatal (tauPos t) ("not a type application: " ++ t.nice g)
-    -}
+-- {--
+--  * Make sure that the type application is indeed a type.
+--  *
+--  * If the first arg is @true@, partial applications are allowed.
+--  -}
+-- checkTApp :: Bool -> [Tau] -> StG Tau
+-- checkTApp partial (con:as) = do
+--         g <- getST
+--         let t = Tau.mkapp con as
+--             units   = repeat (TCon {pos=Position.null, name=TName pPreludeBase "()"})  -- for err correction
+--         case con of
+--             TCon {pos,name} -> case name.findit g of
+--                 -- Just (SymT {typ=ForAll bs _}) | null as, null bs = stio con
+--                 Just (SymT {typ=ForAll bs _}) -> if length as <= length bs then stio t  -- no kind errors
+--                     else if length as < length bs then if !partial then do
+--                         error pos (fill
+--                             (break "too few arguments for application of type constructor"
+--                                 ++ [text (name.nice g) <> text ","]
+--                                 ++ break "there must be"
+--                                 ++ [lit (length bs)]))
+--                         stio (Tau.mkapp t (take (length bs - length as) units))
+--                       else do stio t
+--                     else do error pos (fill (break "too many arguments for application of type constructor"
+--                                     ++ [text (name.nice g) <> text ","]
+--                                     ++ break "at most" ++ [lit (length bs)]
+--                                     ++ break "are allowed."))
+--                             stio (Tau.mkapp con (take (length bs) as))
+--                 _ -> fatal (tauPos t) (fill (break "not a type constructor: " ++ [text (name.nice g)]))
+--             TVar {pos} -> stio t
+--             _ -> fatal (tauPos t) (fill (break "type application of " ++ [text (con.nice g)]))
+-- checkTApp _ _ = undefined       -- must only be called with tau.flat
+-- {-
+-- checkTApp partial (con@TCon {pos,name}) = do
+--         g <- getST
+--         let units   = repeat (TCon {pos=0, name=TName pPrelude "()"})
+--         case name.findit g of
+--             Just (SymT {typ=ForAll bs _}) -> if length bs == 0 then stio con
+--                     else if !partial && length bs > 0 then do
+--                         error pos ("too few arguments for application of type constructor "
+--                             ++ name.nice g ++ ", there must be " ++ show (length bs))
+--                         stio (Tau.mkapp con (take (length bs) units))
+--                     else stio con
+--             _ -> fatal (tauPos t) ("not a type constructor: " ++ name.nice g)
+-- checkTApp t = do
+--     g <- getST
+--     fatal (tauPos t) ("not a type application: " ++ t.nice g)
+--     -}
 
 --- numbers from 0 on
 numbers = iterate (1+) 0
@@ -1225,7 +1241,7 @@ pReturn (p@PConFS{}) = do
     let ret (nm, pat) = do p <- pReturn pat; return (nm, p)
     fields <- mapSt ret p.fields
     return p.{fields}
-pReturn (p@PStrict{pat}) = do
+pReturn (p@PUser{pat}) = do
     pat <- pReturn pat
     return p.{pat}
 pReturn (p@PAnn{pat}) = do
@@ -1280,8 +1296,10 @@ vSym pos name = SymV {pos,
                         sid= if QName.{uid?} name then name.uid else 0,
                                 name, vis=Private, doc=Nothing,
                                 typ=pSigma, expr=Nothing, nativ=Nothing,
-                                pur=false, anno=false, exported=false, state=Unchecked,
-                                strsig = Strictness.U, depth = 0, rkind = 0 }
+                                pur=false, anno=false, exported=false, 
+                                state=Unchecked,
+                                strsig = Strictness.U, depth = 0, 
+                                rkind = RState.empty }
 
 --- check how man lambdas are nested inside each other
 lambdaDepth (Lam {ex}) = 1 + lambdaDepth ex
@@ -1300,18 +1318,19 @@ rhoTau tau        = RhoTau [] tau
  * 2) if there are variables in forall, make sure there are no free variables in the type
  * 3) make sure the variables in forall actually do appear in the type
  -}
+validSigma :: SigmaT a -> StG (SigmaT a)
 validSigma (ForAll [] rho) = do
     let vs = freeTVars [] rho
-    rho <- validRho vs rho
-    stio (ForAll vs rho)
+    rho <- validRho (map Tau.var vs) rho
+    stio (ForAll  (map Tau.varkind vs)  rho)
 validSigma sig = validSigma1 [] sig
 validSigma1 outer (ForAll bound rho) = do
     g <- getST
     -- logmsg TRACE5 (rhoPos rho) ("outer: " ++ display outer)
     -- logmsg TRACE5 (rhoPos rho) ((ForAll bound rho).nice g)
-    let vs = freeTVars (bound++outer) rho
-        fs = freeTVars outer rho
-        ov = [ v | v <- bound, v `notElem` fs ]
+    let vs = freeTVnames (map fst bound++outer) rho
+        fs = freeTVnames outer rho
+        ov = [ v | (v,_) <- bound, v `notElem` fs ]
     -- logmsg TRACE5 (rhoPos rho) ("vs: " ++ display vs)
     -- logmsg TRACE5 (rhoPos rho) ("fs: " ++ display fs)
     -- logmsg TRACE5 (rhoPos rho) ("ov: " ++ display ov)
@@ -1320,7 +1339,7 @@ validSigma1 outer (ForAll bound rho) = do
     unless (null ov)
         (error (rhoPos rho) (fill (break ("bound type variable(s) " ++ joined ", " ov
             ++ " not appearing in type"))))
-    rho <- validRho (vs ++ bound ++ outer) rho
+    rho <- validRho (vs ++ map fst bound ++ outer) rho
     stio (ForAll bound rho)
 
 {--
@@ -1370,16 +1389,11 @@ validRho bound rho = do
 {--
  * check a sigma and translate it to 'QName' form.
  -}
-transSigma sigma = transSigmaP false sigma
-{--
- * check a sigma and translate it to 'QName' form, partial applications are
- * allowed when the first argument is @true@
- -}
-transSigmaP partial sigma = do
+transSigma sigma = do
         sigma <- validSigma sigma
         case sigma of
             ForAll bound rho -> do
-                rho <- transRho partial rho
+                rho <- transRho rho
                 case rho of
                     RhoTau _ _ -> stio (ForAll bound rho)
                     _          -> stio (ForAll bound (unTau rho))
@@ -1389,45 +1403,37 @@ transSigmaP partial sigma = do
  -}
 transCtx (Ctx pos name tau check) = do
         name <- defaultXName pos (TName pPreludeBase "Eq") name
-        tau  <- transTau true tau
+        tau  <- transTau tau
         stio (Ctx pos name tau check)
 
 {--
  * check a rho and translate it to 'QName' form
  -}
-transRho partial (RhoFun ctx (ForAll bnd rho1) rho2) = do
-        rho1 <- transRho false rho1
-        rho2 <- transRho false rho2
+transRho :: RhoS -> StG Rho
+transRho (RhoFun ctx (ForAll bnd rho1) rho2) = do
+        rho1 <- transRho rho1
+        rho2 <- transRho rho2
         ctx  <- mapSt transCtx ctx
         stio (RhoFun ctx (ForAll bnd rho1) rho2)
-transRho partial (RhoTau ctx tau) = do
-        tau <- transTau partial tau
+transRho  (RhoTau ctx tau) = do
+        tau <- transTau tau
         ctx  <- mapSt transCtx ctx
-        -- stio $ unTau (RhoTau ctx tau)
         stio $ RhoTau ctx tau
 
 {--
- * check a tau and translate it to 'QName' form
+    check a tau and translate it to 'QName' form
  -}
-transTau :: Bool -> TauT SName -> StG (TauT QName)
-transTau partial (TVar {pos,var}) = do
-        -- mbcs <- mapSt (resolveTName pos) classes
-        -- let classes = [ c | Just c <- mbcs ]
-        stio (TVar {pos,var})
+transTau :: TauT SName -> StG (TauT QName)
+transTau (TVar{pos,var,kind}) = return (TVar {pos,var,kind})
 
--- transTau partial (TFun a b) = do
---     a <- transTau false a
---     b <- transTau false b
---     stio (TFun a b)
-
-transTau partial (t@Meta _) = do    -- Meta must not happen at this time
+transTau (t@Meta _) = do    -- Meta must not happen at this time
     g <- getST
     fatal (tauPos t) (text("meta type must not occur at this time: " ++ t.nice g))
 
-transTau partial (con@TCon {pos,name}) = transTApp partial [con]
-transTau partial (t@TApp _ _) = transTApp partial t.flat
+transTau (con@TCon {pos,name}) = transTApp [con]
+transTau (t@TApp _ _) = transTApp t.flat
 
-transTApp partial (con:as) = do
+transTApp (con:as) = do
      case con of
         TCon {pos,name} -> do
             tname <- resolveTName pos name
@@ -1438,19 +1444,20 @@ transTApp partial (con:as) = do
                 Just tn -> case tn.findit g of
                     Just (SymT {name,typ=ForAll bs _}) -> do
                             let ncon = TCon {pos, name}
-                            as <- mapSt (transTau false) as
-                            checkTApp partial (ncon:as)
+                            as <- mapSt transTau as
+                            return (Tau.mkapp ncon as)
+                            -- checkTApp partial (ncon:as)
                     Just (alias@SymA {typ})
                         | ForAll bs (RhoTau _ tau) <- typ,
                           length as >= length bs = do
-                                as <- mapSt (transTau true) as  -- partial args allowed in alias
-                                let env = Tree.fromList (zip bs as)
+                                as <- mapSt transTau as  -- partial args allowed in alias
+                                let env = Tree.fromList (zip (map fst bs) as)
                                     ras = drop (length bs) as
                                 nt <- substTau env tau
                                 case nt of
-                                    TApp _ _  -> checkTApp partial (nt.flat ++ ras)
+                                    TApp _ _  -> return (Tau.mkapp nt ras)
                                     nt | null ras  = stio nt
-                                       | otherwise = checkTApp partial (nt:ras)
+                                       | otherwise = return (Tau.mkapp nt ras)
                         | ForAll bs (RhoTau _ tau) <- typ,
                           length as < length bs = do
                                 error pos (msgdoc ("apply " ++ alias.nice g ++ " to at least "
@@ -1468,10 +1475,10 @@ transTApp partial (con:as) = do
                         unit
           where unit = stio (TCon {pos, name=TName pPreludeBase "()"})
         other -> do
-            con <- transTau false con
-            as  <- mapSt (transTau false) as
+            con <- transTau con
+            as  <- mapSt transTau as
             stio (Tau.mkapp con as)
-transTApp _ _ = undefined                   -- must only be used with tau.flat
+transTApp _ = undefined                   -- must only be used with tau.flat
 
 --- make sure only canonical names are returned from resolve
 canonical g qname = case QName.findit qname g of
@@ -2056,11 +2063,11 @@ allAsciiBinders = single ++ [ s1++s2 | s1 <- allBinders, s2 <- single ]
     where single = [ctos c | c <- 'a' .. 'z' ]
 
 --- find all our 'SymV' symbols
-allourvars = do
-    g <- getST
+allourvars :: Global -> [Symbol]
+allourvars g = 
     let collectedenvs = g.thisTab : [ Symbol.env sy | sy <- values g.thisTab, Symbol.{env?} sy ]
-        collectedvars = [ v | env <- collectedenvs, v@SymV {name} <- values env, name.our g]
-    stio collectedvars
+    in [ v | env <- collectedenvs, v@SymV {name} <- values env, name.our g]
+    
 
 --- find all 'SymV' symbols, be they ours or not
 allvars = do
@@ -2177,35 +2184,45 @@ javaName g qname = case qname.findit g of
             SymT {name} -> t "T" name
             SymD {name = MName tname base} -> case tname.findit g of
                 Just (SymT {product,enum}) -> if enum
-                    then memberOf (javaName g tname) (mangled base)
+                    then memberOf (t "T" tname) (mangled base)
                     else if product
-                        then javaName g tname
-                        else memberOf (javaName g tname) ("D" ++ mangled base)
+                        then t "T" tname
+                        else memberOf (t "T" tname) ("D" ++ mangled base)
                 fail -> Prelude.error "javaName: tname is no SymT"
             SymC {name} -> t "C" name
             SymI {name} -> t "I" name
-            SymV {name = MName tname base}
-                | Just (SymT {product=false,enum=false,newt=false,nativ=Nothing}) <- tname.findit g
-                            = memberOf (memberOf tjname "M") mbase
-                | Just (SymC {sid}) <- tname.findit g = memberOf (memberOf tjname "I") mbase
-                | otherwise = memberOf tjname mbase
+            SymV {name = MName tname base} = case tname.findit g of
+                    Just (SymT {product=false,enum=false,newt=false,nativ=Nothing}) 
+                                      = memberOf (memberOf tjname "M") mbase
+                    Just (SymC {sid}) = memberOf (memberOf tjname "I") mbase
+                    otherwise         = memberOf tjname mbase
                 where tjname = javaName g tname
-                      mbase  = vid sym.name.base
+                      mbase  = mangled sym.name.base
             SymV {name = VName pname base}
                 | pname == g.thisPack = JName (pname.className g).base vbase
-                | inPrelude pname g = JName (pname.className g).base vbase
+                | hasJavaImport pname g = JName (pname.className g).base vbase
                 | otherwise = memberOf (pname.className g) vbase
-                where vbase = vid sym.name.base
+                where vbase = mangled sym.name.base
             other -> Prelude.error ("javaName: strange symbol " ++ nice sym g)
         Nothing -> Prelude.error ("javaName: cannot findit " ++ nice qname g)
     where
-        vid name = mangled name
+        -- vid name = mangled name
         t letter (TName pack base)
-            | pack == g.thisPack = JName    ""                   (letter ++ mangled base)
-            | inPrelude pack g    = JName    (pack.className g).base (letter ++ mangled base)
-            | otherwise          = memberOf (pack.className g)   (letter ++ mangled base)
+            | pack == g.thisPack   = JName    ""                   (letter ++ mangled base)
+            | hasJavaImport pack g = JName    (pack.className g).base (letter ++ mangled base)
+            | otherwise            = memberOf (pack.className g)   (letter ++ mangled base)
         t _ _ = Prelude.error "t: need a TName"
 
+{-- By convention, if the classname base of some package is unique among
+    all known packages, an import statement will be generated so that we can
+    use the package base name unqualified.
+    
+    This is to avoid even more clutter in java code.
+    -}
+hasJavaImport :: Pack -> Global -> Bool    
+hasJavaImport p g = case g.gen.jimport.lookup ((p.className g).base) of
+    Just imported -> imported == p
+    otherwise     -> false     
 {--
     Given a 'JName' and a member name, returns the 'JName' of the member.
  -}
@@ -2269,7 +2286,7 @@ unifyTau g t _ _ = t
  * the bounded variables of @sigma1@ in @sigma2@
  * which must be a valid substitution of the former (up to contexts).
  -}
-sigmaInst g sigma1 sigma2 = [ s | Just s <-  map (Tree.lookupS tree) (Sigma.bound sigma1) ]
+sigmaInst g sigma1 sigma2 = [ s | Just s <-  map (Tree.lookupS tree) (Sigma.vars sigma1) ]
     where tree =  unifySigma g sigma1 sigma2
 
 

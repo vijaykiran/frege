@@ -44,13 +44,6 @@ package frege.compiler.Grammar where
      * !!! DO NOT CHANGE FILE Grammar.fr, IT HAS BEEN CREATED AUTOMATICALLY !!!
      */
 
-/*
- * $Author$
- * $Revision$
- * $Date$
- * $Id$
- */
-
 
 import frege.List(Tree, keyvalues, keys, insertkv)
 import Data.List as DL(elemBy)
@@ -59,11 +52,6 @@ import frege.compiler.Nice      except (group, annotation, break)
 import frege.compiler.Utilities as U(
     posItem, posLine, unqualified, tuple)
 import frege.compiler.GUtil
-
-
-version = v "$Revision$" where
-    v (m ~ #(\d+)#) | Just g <- m.group 1 = g.atoi
-    v _ = 0
 
 
 // this will speed up the parser by a factor of 70, cause yyprods comes out monotyped.
@@ -80,6 +68,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
  Note that types like "Maybe x" on the RHS must be given like so: (Maybe x)
  */
 //%type package         ParseResult
+//%type script          ParseResult
 //%type varop           Token
 //%type thenx           Token
 //%type elsex           Token
@@ -105,6 +94,10 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type words           [String]
 //%type varid           (Pos String)
 //%type varids          [Pos String]
+//%type fldid           (Position, String, Visibility, Bool)
+//%type strictfldid     (Position, String, Visibility, Bool)
+//%type plainfldid      (Position, String, Visibility, Bool)
+//%type fldids          [(Position, String, Visibility, Bool)]
 //%type qvarid          SName
 //%type qvarop          SName
 //%type qvarids         [SName]
@@ -200,6 +193,8 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%type guard           Guard
 //%type guards          [Guard]
 //%type qualifiers      (Token -> SName)
+//%type kind            Kind
+//%type simplekind      Kind
 //%explain mbdot        '.' or '•'
 //%explain thenx        then branch
 //%explain elsex        else branch
@@ -208,6 +203,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain packageclause a package clause
 //%explain packagename  a package name
 //%explain packagename1 a package name
+//%explain script      a frege script
 //%explain semicoli     the next definition
 //%explain varop        a variable or an operator
 //%explain operator     an operator
@@ -319,6 +315,12 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 //%explain fields       field list
 //%explain getfield     field
 //%explain getfields    field list
+//%explain kind         a type kind
+//%explain simplekind   a type kind
+//%explain fldid        a field specification
+//%explain strictfldid  a field specification
+//%explain plainfldid   a field specification
+//%explain fldids       field specifications
 %}
 
 %token VARID CONID QVARID QCONID QUALIFIER DOCUMENTATION
@@ -331,6 +333,7 @@ private yyprod1 :: [(Int, YYsi ParseResult Token)]
 %token ROP1 ROP2 ROP3 ROP4 ROP5 ROP6 ROP7 ROP8 ROP9 ROP10 ROP11 ROP12 ROP13 ROP14 ROP15 ROP16
 %token NOP1 NOP2 NOP3 NOP4 NOP5 NOP6 NOP7 NOP8 NOP9 NOP10 NOP11 NOP12 NOP13 NOP14 NOP15 NOP16
 %token NOP0 LOP0 ROP0       /*** pseudo tokens never seen by parser */
+%token INTERPRET
 
 %start package
 
@@ -393,11 +396,17 @@ package:
     packageclause ';' definitions               { \(a,d,p)\w\b     -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
-                                                        YYM.return (a,b,d) }}
+                                                        YYM.return $ Program.Module (a,b,d) }}
     | packageclause WHERE '{' definitions '}'   { \(a,d,p)\w\_\b\_ -> do {
                                                         changeST Global.{sub <- SubSt.{
                                                             thisPos = p}};
-                                                        YYM.return (a,b,d) }}
+                                                        YYM.return $ Program.Module (a,b,d) }}
+    | INTERPRET script {\_\d -> d}
+    ;
+
+script:
+    expr {\e -> do {
+                                YYM.return $ Program.Expression e}}
     ;
 
 nativename:
@@ -591,7 +600,7 @@ importitem:
     ;
 
 importspec:
-    importitem                      { \s      -> ImportItem.{alias = (U.enclosed • Token.value • SName.id • ImportItem.name) s} s}
+    importitem                      { \s      -> ImportItem.{alias = (U.enclosed . Token.value . SName.id . ImportItem.name) s} s}
     | importitem alias              { \s\a    -> ImportItem.{alias = U.enclosed (Token.value a)} s }
     | PUBLIC importspec             { \_\s    -> ImportItem.export s }
     ;
@@ -629,10 +638,10 @@ varidkw:
     | IMPORT                { Token.{tokid = VARID} }
     ;
 
-varids:
-    varid                   { single }
-    | varid ',' varids      { liste  }
-    ;
+// varids:
+//    varid                   { single }
+//    | varid ',' varids      { liste  }
+//    ;
 
 qvarids:
     qvarop                  { single }
@@ -754,7 +763,7 @@ sigma:
     ;
 
 forall:
-    FORALL boundvars mbdot rho      { \_\bs\_\r      -> ForAll bs r }
+    FORALL boundvars mbdot rho      { \_\bs\_\r      -> ForAll  [ (b,KVar) | b <- bs ]  r }
     ;
 
 mbdot:
@@ -820,7 +829,8 @@ simpletype:
 
 
 tyvar:
-    VARID                   { \n -> TVar (yyline n) (Token.value n)  }
+    VARID                        { \n         -> TVar (yyline n) KVar (Token.value n)  }
+    | '('  VARID DCOLON kind ')' { \_\n\_\k\_ -> TVar (yyline n) k    (Token.value n)  }
 ;
 
 
@@ -832,6 +842,22 @@ tyname:
     | '(' ARROW ')'         { \_\(a::Token)\_ -> With1 baseToken a.{tokid=CONID, value="->"} }
     ;
 
+kind:
+    simplekind ARROW kind     { \a\_\c -> KApp a c }
+    | simplekind
+    ;
+
+simplekind:
+    LOP3                    { const KType }
+    | VARID                 { \v -> do
+                                let w = Token.value v
+                                if w == "generic" then return KGen
+                                else do
+                                    yyerror (yyline v) ("expected `generic` instead of `" ++ w ++ "`")
+                                    return KType
+                            }
+    | '(' kind ')'          { \_\b\_ -> b }
+    ;
 
 classdef:
     CLASS CONID tyvar wheredef       {
@@ -843,7 +869,7 @@ classdef:
             ctxs <- U.tauToCtx tau
             sups <- classContext (Token.value i) ctxs (posItem v)
             YYM.return (ClaDcl {pos = yyline i, vis = Public, name = Token.value i,
-                             clvar = TVar (posLine v) (posItem v),
+                             clvar = TVar (posLine v) KVar (posItem v),
                              supers = sups, defs = defs, doc = Nothing})
     }
     ;
@@ -913,21 +939,30 @@ visdalt:
     ;
 
 strictdalt:
-    '!' simpledalt              { \_\dcon ->  DCon.{strict=true} dcon }
+      '!' simpledalt            { \_\dcon ->  DCon.{ -- strict=true,
+                                                    flds <-map ConField.{strict=true}}  dcon }
+    | '?' simpledalt            { \_\dcon ->  DCon.{ -- strict=false,
+                                                    flds <-map ConField.{strict=false}} dcon }
     | simpledalt
     ;
 
 simpledalt:
-    CONID                       { \c        -> DCon {pos=yyline c, vis=Public, strict=false,
+    CONID                       { \c        -> DCon {pos=yyline c, vis=Public, -- strict=false,
                                                 name=Token.value c, flds=[], doc=Nothing } }
-    | CONID '{' conflds '}'     { \c\_\fs\_ -> DCon {pos=yyline c, vis=Public, strict=false,
+    | CONID '{' conflds '}'     { \c\_\fs\_ -> DCon {pos=yyline c, vis=Public, -- strict=false,
                                                 name=Token.value c, flds=fs, doc=Nothing } }
-    | CONID contypes            { \c\fs     -> DCon {pos=yyline c, vis=Public, strict=false,
+    | CONID contypes            { \c\fs     -> DCon {pos=yyline c, vis=Public, -- strict=false,
                                                 name=Token.value c, flds=fs, doc=Nothing } }
     ;
 
 contypes:
-    simpletypes                 { map (Field Position.null Nothing Nothing • ForAll [] • RhoTau []) }
+    simpletypes                 { \taus -> do
+                                    g <- getST
+                                    let strict = U.strictMode g
+                                        field  = Field Position.null Nothing Nothing Public strict
+                                                    . ForAll [] . RhoTau []
+                                    return (map field taus)
+                                }
     ;
 
 simpletypes:
@@ -944,10 +979,37 @@ conflds:
     ;
 
 confld:
-    varids DCOLON sigma           { \vs\_\t -> [Field (snd v) (Just (fst v)) Nothing t | v <- vs ]}
-    | docs varids DCOLON sigma    { \(d::String)\vs\_\t ->
+    fldids DCOLON sigma           { \vs\_\t -> [Field pos (Just name) Nothing vis strict t |
+                                                (pos,name,vis,strict) <- vs ]
+                                  }
+    | docs fldids DCOLON sigma    { \(d::String)\vs\_\t ->
                                         map ConField.{doc=Just d}
-                                            [Field (snd v) (Just (fst v)) Nothing t    | v <- vs ]
+                                            [Field pos (Just name) Nothing vis strict t |
+                                                (pos,name,vis,strict) <- vs ]
+                                  }
+    ;
+
+fldids:
+      fldid                     { single }
+    | fldid ',' fldids          { liste  }
+    ;
+
+fldid:
+    strictfldid
+    | PUBLIC  strictfldid        { \_ \(pos,name,vis,strict) -> (pos,name,Public, strict) }
+    | PRIVATE strictfldid        { \_ \(pos,name,vis,strict) -> (pos,name,Private,strict) }
+    ;
+
+strictfldid:
+    plainfldid
+    | '!' plainfldid            { \_ \(pos,name,vis,strict) -> (pos,name,vis, true) }
+    | '?' plainfldid            { \_ \(pos,name,vis,strict) -> (pos,name,vis, false) }
+    ;
+
+plainfldid:
+    varid                       { \(name, pos) -> do
+                                    g <- getST
+                                    return (pos, name, Public, U.strictMode g)
                                 }
     ;
 
@@ -993,7 +1055,12 @@ funhead:
 literal:
     TRUE                            { \x ->  Lit (yyline x) LBool "true"   Nothing}
     | FALSE                         { \x ->  Lit (yyline x) LBool "false"  Nothing}
-    | CHRCONST                      { \x ->  Lit (yyline x) LChar   (Token.value x) Nothing }
+    | CHRCONST                      { \x ->  do
+                                                let v = Token.value x
+                                                when (length v > 3 && strhead v 2 != "'\\")
+                                                    (yyerror (yyline x) ("bad char literal: " ++ v))
+                                                YYM.return $ Lit (yyline x) LChar v Nothing
+                                    }
     | STRCONST                      { \x ->  Lit (yyline x) LString (Token.value x) Nothing }
     | INTCONST                      { \x ->  Lit (yyline x) LInt    (Token.value x) Nothing }
     | BIGCONST                      { \x ->  Lit (yyline x) LBig    (bignum x)      Nothing }
@@ -1019,13 +1086,13 @@ lcqual:
 lcquals:
     lcqual                          { single }
     | lcqual ',' lcquals            { liste  }
-    | lcqual ','                    { (const @ single) }
+    | lcqual ','                    { (const . single) }
     ;
 
 
 dodefs:
     lcqual                          { single }
-    | lcqual semicoli               { (const @ single) }
+    | lcqual semicoli               { (const . single) }
     | lcqual semicoli dodefs        { liste }
     ;
 
@@ -1040,7 +1107,7 @@ gqual:
 gquals:
     gqual                          { single }
     | gqual ',' gquals             { liste  }
-    | gqual ','                    { (const @ single) }
+    | gqual ','                    { (const . single) }
     ;
 
 guard:
@@ -1255,15 +1322,15 @@ term:
                                                        (Con (yyline z)  (With1 baseToken z.{tokid=CONID, value="[]"}) Nothing)
                                                        es}
     | '[' expr '|' lcquals ']'      { \(a::Token)\e\b\qs\(z::Token) -> do {
-				let {nil = z.{tokid=CONID, value="[]"}};
-				listComprehension (yyline b) e qs
+                let {nil = z.{tokid=CONID, value="[]"}};
+                listComprehension (yyline b) e qs
                                             (Con {name = With1 baseToken nil, pos = nil.position, typ = Nothing})
                                     }}
     ;
 
 commata:
     ','                             { const 1 }
-    | ',' commata                   { ((+) • const 1) }
+    | ',' commata                   { ((+) . const 1) }
     ;
 
 fields:
@@ -1276,13 +1343,13 @@ fields:
                                             } else
                                                 YYM.return (a:ls)
                                     }
-    | field ','                     { (const @ single) }
+    | field ','                     { (const . single) }
     ;
 
 getfields:
     getfield                        { single }
     | getfield ',' getfields        { liste  }
-    | getfield ','                  { (const @ single) }
+    | getfield ','                  { (const . single) }
     ;
 
 getfield:
@@ -1299,12 +1366,12 @@ field:
 exprSC :
     expr                            { single }
     | expr ',' exprSC               { liste  }
-    | expr ','                      { (const @ single) }
+    | expr ','                      { (const . single) }
     ;
 exprSS:
     expr                            { single }
     | expr ';' exprSS               { liste }
-    | expr ';'                      { (const @ single) }
+    | expr ';'                      { (const . single) }
     ;
 
 %%
