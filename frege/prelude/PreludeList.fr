@@ -292,7 +292,8 @@ filter p []     = []
 
 
 
-{--
+{--  warning: It is strongly advised to use 'fold' instead - beware of stack overflow!
+
     'foldl', applied to a binary operator, a starting value (typically the
     left identity of the operator), and a list, reduces the list using
     the binary operator, from left to right:
@@ -597,4 +598,15 @@ zipWith3 f _ _ _ = []
 protected    intersperse a [x]      = [x]
 protected    intersperse a (x:ys)   = x:a:intersperse a ys
 protected    intersperse a []       = []
+
+
+{--
+    @xs !! n@ is the element with index /n/ of the list /xs/,
+    where the head element of a list has index 0.
+-}
+(x:_)  !! 0         = x
+(_:xs) !! n | n > 0 = xs !! (n-1)
+(_:_)  !! n         = error ("Prelude.!!: negative index ("     ++ String.intToString n ++ ")")
+[]     !! n         = error ("Prelude.!!: empty list indexed (" ++ String.intToString n ++ ")")
+
 

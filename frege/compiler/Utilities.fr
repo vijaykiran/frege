@@ -46,7 +46,6 @@ import frege.Prelude except (error, print, println, break)
 import frege.List (Tree, Map, OrdSet, updatekv, insertkv,
                     union, including, contains, keys, values, fromKeys)
 import Data.List as DL(partitioned, sortBy)
-import frege.IO(`<<`)
 
 import frege.compiler.Data
 import frege.compiler.Nice except(group)
@@ -110,13 +109,15 @@ strictMode :: Global -> Bool
 strictMode g = isOn g.options.flags STRICT 
 
 --- the path separator used here
-pathSep = fromMaybe ":"  (IO.getProperty "path.separator")
+pathSep = fromMaybe ":"  (System.getProperty "path.separator")
 
 --- a pattern that can be used to 'Regex.split' a 'String' by the path separator
-pathRE = pathSep.quote.compile
+pathRE = case regcomp pathSep.quote of
+    Right p -> p
+    Left _ -> Prelude.error ("cannot regcomp " ++ pathSep.quote)
 
 --- the class path this JVM started with, as ['String']
-classPath = (pathRE.splitted <~ fromMaybe "." <~ IO.getProperty) "java.class.path"
+classPath = (pathRE.splitted • fromMaybe "." • System.getProperty) "java.class.path"
 
 --- get us the one and only class loader
 theClassLoader opt = CT.makeClassLoader (ourPath opt)
@@ -130,7 +131,9 @@ ourPath opt = result where
 --################### functions operating on the state ##############################
 {-- trace output from stateful computation -}
 debugST :: Flag -> String -> StG Bool
-debugST f s = inState (debug f s)
+debugST f s = do
+    g <- getST
+    return (debug f s g)
 
 {-- trace from anywhere -}
 debug :: Flag -> String -> Global -> Bool
@@ -359,8 +362,8 @@ rhoPos = Rho.getpos
 --- get the 'Position' of a tau type
 tauPos = Tau.getpos
 
-
--- turn a function (Global -> a) into StG a
+--- warning: inState f should be replaced by f g
+--- turn a function (Global -> a) into StG a
 inState f = do g <- getST; stio (f g)
 
 {--
@@ -379,7 +382,7 @@ reproduce pos g = joined "" (loop list)
             -}
 
 --- show expression using the operator table from the global state
-showexM x = inState (showex false x)
+showexM x = getST >>= return . (showex false x)
 showex nicest x global = showprec 17 x where
     optree = Global.optab global
     -- showprec :: Int -> ExprT Nice:q -> String
@@ -562,7 +565,8 @@ nicectx xs g
     | [ctx] <- xs = single ctx ++ " => "
     | otherwise   = "(" ++ joined "," (map single xs) ++ ") => "
     where
-        single (Ctx pos name tau _) = nice (TApp (TCon {pos,name}) tau) g
+        single (Ctx pos name tau) = nice (TApp (TCon {pos,name}) tau) g
+        
 
 
 nicerctx :: (Nice t, QNameMatcher t) => [ContextT t] -> Global -> String
@@ -571,7 +575,8 @@ nicerctx xs g
     | [ctx] <- xs = single ctx ++ " => "
     | otherwise   = "(" ++ joined "," (map single xs) ++ ") => "
     where
-        single (Ctx pos name tau _) = nicer (TApp (TCon {pos,name}) tau) g
+        single (Ctx pos name tau) = nicer (TApp (TCon {pos,name}) tau) g
+        
 
 instance Nice (Nice t, QNameMatcher t) => TauT t where
     nicer t g = showt 2 (unAlias g t) -- if isOn g.options.flags IDE then showt 2 (unAlias g t) else nice t g
@@ -584,7 +589,16 @@ instance Nice (Nice t, QNameMatcher t) => TauT t where
             showt _ (t@TApp _ _)
                 | [TCon {name}, t] <- flat, name.nice g ~ #\[\]$# = "[" ++ showt 2 t ++ "]"
                 | (TCon {name}:ts) <- flat, name.nice g ~ #\(,+\)$# = "(" ++ joined "," (map (showt 2) ts) ++ ")"
-                where flat = t.flat
+                | isEither flat = "(" ++ showEither flat ++ ")"
+                where 
+                    flat = t.flat
+                    isEither [TCon{name}, a, b] = name.nice g ~ ´\bEither$´
+                    isEither _ = false
+                    showEither [_, a, b]
+                        | TApp{} <- a, isEither aflat = showEither aflat ++ " | " ++ showt 2 b
+                        | otherwise =  showt 2 a ++ " | " ++ showt 2 b
+                        where aflat = Tau.flat a
+                    showEither _ = Prelude.error ("only good for Either a b")
             showt 1 fun
                 | [TCon {name}, a, b] <- Tau.flat fun,
                   name.nice g ~ ´->$´
@@ -655,7 +669,8 @@ unAlias g tau = if isOn g.options.flags SPECIAL then fake tau else unAlias (fake
             where
 
                 aliased (tau1@TApp a b) (SymA{pos,name,typ}) = case rho of
-                        RhoTau [] tau2 -> case unify Nil tau2 tau1 of
+                        -- the expansion of the type alias must be more than a tvar 
+                        RhoTau [] tau2 | not (isTvApp tau2) -> case unify Nil tau2 tau1 of
                             Just subst -> Just (substTau env aApp)
                                 where env = Tree.map unAlias subst
                             Nothing    -> Nothing
@@ -804,7 +819,7 @@ private enterWith insupd p n s = do
                     ntab <- insupd tab n s
                     changeST Global.{packages <- updatekv p ntab}
             Nothing  -> do
-                    sp <- inState (Pack.unpack p)
+                    let sp = Pack.unpack p g
                     error (Symbol.pos s) (fill ([text "package", text "`" <> text sp <> text "`"]
                                                  ++  break "does not exist."))
 
@@ -815,8 +830,8 @@ private insertSym tab key value = case tab.lookup key of
     Nothing -> stio (tab.insert key value)
     Just old  -> do
         g <- getST
-        on <- inState (Symbol.nice old)
-        qn <- inState (Symbol.nice value)
+        let on = Symbol.nice old g
+            qn = Symbol.nice value g
         case value of
             SymV {pos} -> error pos (msgdoc("duplicate function or pattern binding for `"
                             ++ value.name.nice g ++ "`, already bound on line "
@@ -830,7 +845,8 @@ private updateSym :: Symtab -> String -> Symbol -> StG Symtab
 private updateSym tab key value = case tab.lookup key of
     Just _   -> stio (tab.update key value)
     Nothing  -> do
-        qn <- inState (Symbol.nice value)
+        g <- getST
+        let qn = Symbol.nice value g
         error value.pos (fill (break ("cannot update " ++ qn ++ "  " ++ show (keys tab))))
         stio (tab.update key value)
 
@@ -849,11 +865,12 @@ private updateSym tab key value = case tab.lookup key of
 enter :: Symbol -> StG ()
 enter sym
     | sym.{alias?} = do
-            asy <- inState sym.alias.find
+            g <- getST
+            let asy = sym.alias.find g
             case asy of
                 Nothing -> do
-                    sa <- inState sym.nice
-                    st <- inState sym.alias.nice
+                    let sa  = sym.nicer g
+                        -- st  = sym.alias.nice g
                     error sym.pos (fill (break ("can't enter " ++ sa ++ " for unknown target")))
                 Just _ -> enterOrUpdate
     | otherwise    = enterOrUpdate
@@ -904,7 +921,7 @@ changeSym sym = do
                 let tsy = do a <- t.find g; a.follow g
                 case tsy of
                     Nothing -> do
-                        qn <- inState t.nice
+                        let qn =  t.nice g
                         error sym.pos (fill ([text "namespace", text "`" <> text qn <> text "`"] ++ break "does not exist"))
                     Just typ | typ.{env?} = do
                                 env <- updateSym typ.env sym.name.key sym
@@ -940,7 +957,7 @@ private enterByName sym = do
             let tsy = do a <- t.find g; a.follow g
             case tsy of
                 Nothing -> do
-                    qn <- inState t.nice
+                    let qn = t.nice g
                     error sym.pos (msgdoc("namespace `" ++ qn ++ "` does not exist"))
                 Just typ | typ.{env?} = do
                             env <- insertSym typ.env sym.name.key sym
@@ -987,7 +1004,8 @@ typesOfNativ nativ g = case lookup g.javaEnv nativ of
     Just (_,ls)  -> ls
     nothing -> []
 
---- Find the super types that are associated with a native type.
+--- Find the proper super types that are associated with a native type.
+--- (i.e. the type itself is not in the list)
 supersOfNativ :: String -> Global -> [String]
 supersOfNativ nativ g = case lookup g.javaEnv nativ of
     Just (cs, _)  -> cs
@@ -1101,14 +1119,14 @@ tsort odeps = result where
         where
             di = deparr.frozenElemAt i
             ti = t `including` i
-    deeps = Array.fromList [ deepdep Nil i | i <- 0..(deparr.length-1) ]
+    deeps = Array.fromList [ deepdep Nil i | i <- enumFromTo 0 (deparr.length-1) ]
     i `dependson` j = deeps.frozenElemAt i `contains` j
     sortit [] = []
     sortit (x:xs) = sortit before ++ (eqs:sortit after) where
         (anfang, after) = partitioned (x `dependson`) xs
         (same, before)  = partitioned (`dependson` x) anfang
         eqs = x:same
-    sorted = sortit (0..deeps.length-1)
+    sorted = sortit (enumFromTo 0 (deeps.length-1))
     -- fatal4 = Prelude.error "tsort: can't map back??"
     back ints = map i2o.frozenElemAt ints
     result = [ back is | is <- sorted ]
@@ -1151,32 +1169,44 @@ freeTauTVars bound collected (TApp a b)
 --                 = freeTauTVars bound (freeTauTVars bound collected a) b
 freeTauTVars _ collected _ = collected
 
-substSigma :: Tree String (TauT t) ->  SigmaT t -> StG (SigmaT t)
-substSigma t (ForAll bndrs rho) = do
-        rho <- substRho t' rho
-        stio (ForAll bndrs rho)
+--- note: type must not contain bound Metas
+substSigma :: Tree String (TauT t) ->  SigmaT t  -> SigmaT t
+substSigma t (ForAll bndrs rho) = ForAll bndrs (substRho t' rho)
     where t' = fold Tree.delete t (map fst bndrs)
-substRho t (RhoFun ctx sig rho) = do
-        ctx <- mapSt (substCtx t) ctx
-        sig <- substSigma t sig
-        rho <- substRho t rho
-        stio (RhoFun ctx sig rho)
-substRho t (RhoTau ctx tau) = liftM2 RhoTau (mapSt (substCtx t) ctx) (substTau t tau)
--- substTau t (TFun a b)       = liftM2 TFun (substTau t a) (substTau t b)
-substTau t (tau@TCon{})     = stio tau
-substTau t (TApp a b)       = liftM2 TApp (substTau t a) (substTau t b)
-substTau t (typ@Meta (Flexi{ref=r})) = do
-        bound <- doio (r.get)
-        case bound of
-            Nothing  = stio typ
-            Just tau = substTau t tau
-substTau t (typ@Meta _)     = stio typ
-substTau t (typ@TVar {var}) = case Tree.lookupS t var of
-        Just tau -> stio tau
-        Nothing  -> stio typ
-substCtx t (x@Ctx {tau}) = do
-        tau <- substTau t tau
-        stio (x.{tau})
+substRho t (RhoFun ctx sig rho) = let
+            ctx' = map (substCtx t) ctx
+            sig' = substSigma t sig 
+            rho' = substRho t rho 
+        in (RhoFun ctx' sig' rho')
+substRho t (RhoTau ctx tau)  = RhoTau (map (substCtx t) ctx) (substTau t tau)
+substTau t (tau@TCon{})      = tau
+substTau t (TApp a b)        = TApp (substTau t a) (substTau t b)
+
+substTau t (typ@Meta Flexi{ref}) = case unsafeGetRef ref of
+        Just _ -> Prelude.error ("bound Meta not allowed in substTau")
+        _      -> typ
+substTau t (typ@Meta _)      = typ     -- Meta must be unbound
+
+substTau t (typ@TVar {var})  = case Tree.lookupS t var of
+        Just tau -> tau
+        Nothing  -> typ
+
+substCtx :: Tree String (TauT a) -> ContextT a -> ContextT a        
+substCtx t x  = x.{tau <- substTau t}
+
+{-
+    We use this *only* to check if our premise, that no bound
+    Meta variable ever occurs in 'substTau'  always holds.
+    
+    Note that substTau was in the StG monad earlier, and we
+    followed bound Meta. On a second thought, it would appear
+    to be better to remove that if it wasn't necessary.
+    
+    Hence we want to make sure that the property introduced
+    post factum holds.
+-}
+
+private pure native unsafeGetRef get  :: IORef a -> a               
 
 -- {--
 --  * Make sure that the type application is indeed a type.
@@ -1293,13 +1323,14 @@ replaceLocals syms x = stio (Left x)
  * If the name is a 'Local' one, the 'Symbol.sid' is set to the 'QName.uid'
  -}
 vSym pos name = SymV {pos,
-                        sid= if QName.{uid?} name then name.uid else 0,
-                                name, vis=Private, doc=Nothing,
-                                typ=pSigma, expr=Nothing, nativ=Nothing,
-                                pur=false, anno=false, exported=false, 
-                                state=Unchecked,
-                                strsig = Strictness.U, depth = 0, 
-                                rkind = RState.empty }
+                    sid= if QName.{uid?} name then name.uid else 0,
+                    name, vis=Private, doc=Nothing,
+                    typ=pSigma, expr=Nothing, nativ=Nothing,
+                    pur=false, anno=false, exported=false, 
+                    state=Unchecked,
+                    strsig = Strictness.U, depth = 0, 
+                    rkind = RState.empty,
+                    throwing = [] }
 
 --- check how man lambdas are nested inside each other
 lambdaDepth (Lam {ex}) = 1 + lambdaDepth ex
@@ -1353,12 +1384,6 @@ validSigma1 outer (ForAll bound rho) = do
  -}
 -- validRho :: [String] -> RhoT Ord:a -> StG (RhoT a)
 validRho bound rho = do
-        {-
-        let ctxx = rhoContext rho
-            ctxs = Rho.context rho ++ ctxx
-            tree = Tree.fromList [(tv.var, tv) | Ctx _ _ tv _ <- ctxx] // .classes=[] see rhoContext
-        rho <- substRho tree rho    // replace TVar x [Class] with TVar x []
-        -}
         foreach (Rho.context rho) check
         case rho of
             RhoFun _ sig r -> do
@@ -1367,25 +1392,13 @@ validRho bound rho = do
                  stio rho.{sigma=sig, rho=r}
             _ -> stio rho
     where
-        check (Ctx pos qname tau checked) = do
+        check (Ctx pos qname tau) = do
             let vars = keys (freeTauTVars [] Nil tau)
                 bads = filter (`notElem` bound) vars
             unless (null bads) do
                 error pos (fill (break ("context must not name type variables " ++ joined "," bads)))
             stio ()
-            {-
-        rhoContext rho = [ Ctx p c (TVar {pos=p,var=t}) false |
-                            ((c,t),p) <- uniqBy (using fst)
-                                            (sortBy (comparing fst) (rhoCtx [] rho)) ]
-        rhoCtx acc (RhoTau _ tau) = tauCtx acc tau
-        rhoCtx acc (RhoFun _ (ForAll _ r) rho) = rhoCtx (rhoCtx acc r) rho
-        tauCtx acc (tv@TVar {pos}) = [ ((q,tv.var), tv.pos) | q <- tv.classes ] ++ acc
-        tauCtx acc (TFun a b)  = tauCtx (tauCtx acc a) b
-        tauCtx acc (TApp a b)  = tauCtx (tauCtx acc a) b
-        tauCtx acc (TCon {pos}) = acc
-        tauCtx acc (Meta _) = acc
-        -}
-
+        
 {--
  * check a sigma and translate it to 'QName' form.
  -}
@@ -1401,10 +1414,11 @@ transSigma sigma = do
 {--
  * transform a string context to q 'QName' context
  -}
-transCtx (Ctx pos name tau check) = do
+transCtx (Ctx pos name tau) = do
         name <- defaultXName pos (TName pPreludeBase "Eq") name
         tau  <- transTau tau
-        stio (Ctx pos name tau check)
+        stio (Ctx pos name tau)
+
 
 {--
  * check a rho and translate it to 'QName' form
@@ -1453,11 +1467,15 @@ transTApp (con:as) = do
                                 as <- mapSt transTau as  -- partial args allowed in alias
                                 let env = Tree.fromList (zip (map fst bs) as)
                                     ras = drop (length bs) as
-                                nt <- substTau env tau
-                                case nt of
-                                    TApp _ _  -> return (Tau.mkapp nt ras)
-                                    nt | null ras  = stio nt
-                                       | otherwise = return (Tau.mkapp nt ras)
+                                let nt = substTau env tau
+                                -- make sure errors are flagged on the right position
+                                let posnt = case Tau.flat nt of
+                                        (tcon:xs) | tcon.{pos?} = Tau.mkapp tcon.{pos} xs
+                                        other -> nt
+                                case posnt of
+                                    TApp _ _  -> return (Tau.mkapp posnt ras)
+                                    nt | null ras  = stio posnt
+                                       | otherwise = return (Tau.mkapp posnt ras)
                         | ForAll bs (RhoTau _ tau) <- typ,
                           length as < length bs = do
                                 error pos (msgdoc ("apply " ++ alias.nice g ++ " to at least "
@@ -1504,19 +1522,48 @@ protected resolve fname pos sname = do
         (psyms, asyms)
             | null psyms, null asyms = stio []      -- not found erros was flagged by resolve3
             | null asyms = do   -- only private symbols found
-                error pos (msgdoc ("`" ++ show sname ++ "´ resolves to private " ++ (flip nice g • head) psyms
+                error pos (msgdoc ("`" ++ show sname ++ "´ resolves to private " ++ (flip nicer g • head) psyms
                             ++ ", access is not allowed."))
                 stio []         -- ignore private ones
             | otherwise = do
                 let ss = reverse asyms
+                foreach ss docWarningSym
                 foreach ss (traceSym sname)
                 stio (map Symbol.name ss) -- some public ones found
             where
+                docWarningSym :: Symbol -> StG ()
+                docWarningSym sym = do
+                    g <- getST
+                    docWarning pos (sym.name.nicer g) sym.doc
+                     
                 traceSym :: SName -> Symbol -> StG ()
                 traceSym sname symbol = do
                     logmsg TRACE5 pos (text (show sname ++ " resolved to " ++ nice symbol g ++ " ("
                         ++ QName.show symbol.name ++ ", " ++ show symbol.vis ++ ")"))
 
+{-- 
+    Print the warning encoded in documentation code, if any.
+    
+    The flag @NODOCWARNNGS@ is temporarily set by import to avoid
+    warnings on names that are resolved, but not used.
+    -}
+docWarning pos msg (Just (m~´^\s*warning:\s*([^\n]+)´)) = do
+    g <- getST
+    unless (isOn g.options.flags NODOCWARNINGS) do
+        warn pos (msgdoc (msg ++ ": " ++ fromMaybe "?" (m.group 1)))
+docWarning pos msg _ = return ()
+
+{-- 
+    Print a warning or hint regarding a symbol only if the documentation comment
+    does not start with "nowarn:"
+    -} 
+symWarning :: (Position -> DOCUMENT -> StG ()) -> Symbol -> DOCUMENT -> StG ()
+symWarning warn sym msg = do
+     case sym.doc of
+        Just ´^\s*nowarn:´ -> return ()
+        other -> warn sym.pos msg 
+
+    
 -- resolve3 keeps the original name, i.e. 'Int.<=>' will not be resolved to 'Ord.<=>'
 private resolve3 fname pos (Simple Token{value=qs}) = do
     g <- getST
@@ -1526,7 +1573,9 @@ private resolve3 fname pos (Simple Token{value=qs}) = do
         vname = VName g.thisPack s
         tname = TName g.thisPack s
         find x = QName.findit x g
-        names = [mname, vname, tname]
+        names
+            | mname == vname = [mname, tname]           -- avoid duplicate warnings/finds
+            | otherwise      = [mname, vname, tname]
         found = map find names
         result = [ sym | Just sym <- found ]                -- canonical through findit
 --                                  (Symbol.name sym).base == s,
@@ -1755,8 +1804,8 @@ dlDistance src dst = at t3 m n
         m = length src
         n = length dst
         ins tree (x,y) = insert tree x y
-        t1 = fold ins Nil [ ((i,0), i) | i <- 0..m ]
-        t2 = fold ins t1  [ ((0,j), j) | j <- 0..n ]
+        t1 = fold ins Nil [ ((i,0), i) | i <- enumFromTo 0 m ]
+        t2 = fold ins t1  [ ((0,j), j) | j <- enumFromTo 0 n ]
         t3 = loop t2 1 1
         loop t i j
             | i <= m, j <= n = loop (insert t (i,j) dijx) i (j+1)
@@ -2060,7 +2109,7 @@ allBinders = single ++ [ s1++s2 | s1 <- allBinders, s2 <- single ]
     where single = [ctos c | c <- "αβγδεζηθιßκλμνξοπρςστυφχψω" ]   -- 'a' .. 'z' ]
 
 allAsciiBinders = single ++ [ s1++s2 | s1 <- allBinders, s2 <- single ]
-    where single = [ctos c | c <- 'a' .. 'z' ]
+    where single = [ctos c | c <- enumFromTo 'a' 'z' ]
 
 --- find all our 'SymV' symbols
 allourvars :: Global -> [Symbol]
@@ -2239,10 +2288,29 @@ isUnit _                                               = Nothing
 isMaybe (TApp (TCon {name = TName p "Maybe"}) ty) | p == pPreludeBase = Just ty
 isMaybe _ = Nothing
 
-isException (TApp (TApp (TCon {name = TName p1 "Either"})
-                        (TCon {name = TName p2 "JException"}))
-                  ty) |  p1 == pPreludeBase, p2 == pPreludeBase = Just ty
-isException _ = Nothing
+{-- 
+    @isException g tau@ returns 'Just' (_left_, _right_) if and only if the following
+    conditions both hold:
+    - _tau_ is of the form 'Either' _left_ _right_
+    - _left_ is ('isThrowable' g _left_) or ('isException' g _left_) is not 'Nothing'    
+-}  
+isException g (TApp (TApp con ex) ty) 
+    | isEither con, isEx ex = Just (ex, ty)
+    where
+        isEither  TCon {name = TName p1 "Either"} = p1 == pPreludeBase
+        isEither  _                               = false 
+        isEx (TApp (TApp con a) b) = isEither con && isEx a && isThrowable g b
+        isEx x = isThrowable g x 
+isException g _ = Nothing
+
+{-- 
+    @true@ if and only if in environment _g_, 
+    type _t_ denotes a sub type of @java.lang.Throwable@ 
+-}
+isThrowable g ty = case instTauSym ty g of
+        Just SymT{nativ=Just x} -> x == "java.lang.Throwable" 
+                                     || "java.lang.Throwable" `elem` supersOfNativ x g
+        other -> false
 
 isIO (TApp (TApp (TCon {name = TName p "ST"}) st ) ty)
     | p == pPreludeBase = Just (st, ty)
@@ -2319,8 +2387,10 @@ tauToCtx tau
         tauCtx (TApp (TCon {pos=tpos, name}) tvapp)
             | isTvApp tvapp = do
                 let pos = tpos.merge (getpos tvapp)
-                stio [Ctx {pos, cname=name, tau = tvapp, checked = false}]
+                stio [Ctx {pos, cname=name, tau = tvapp}]
         tauCtx tau = bad tau
-        isTvApp (TVar {}) = true
-        isTvApp (TApp a b) = isTvApp a && isTvApp b
-        isTvApp _ = false
+
+--- true if and only if the 'Tau' type is a 'TVar' or an application of 'TVar's
+isTvApp (TVar {}) = true
+isTvApp (TApp a b) = isTvApp a && isTvApp b
+isTvApp _ = false

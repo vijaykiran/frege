@@ -85,8 +85,8 @@ Uncommon characters defined here:
 -}
 
 protected package frege.prelude.PreludeBase 
-    inline candidates (otherwise, id, const, asTypeOf, $!, $, •, <~, flip, ST.>>=,
-        State.put, State.change, State.>>=, State.>>, State.return, State.run,
+    inline candidates (otherwise, id, const, asTypeOf, $!, $, •, flip, ST.>>=,
+        State.put, State.change, State.>>=, State.>>, State.return, -- State.run,
         curry
         ) 
     where
@@ -115,12 +115,13 @@ infix  8 `<=>` `compare`
 infix  7 `==` `!=` `/=` `===` `!==` -- `<>`
 infixr 6 `&&`  `und`
 infixr 5 `||`  `oder` `^^` 
-infix  4 `..`
+-- infix  4 `..`
 infixr 4 `:`
 infixl 4 `<$>` `<*>` `<*` `*>` fmap
 infixl 3 `>>` `>>=`              -- monad bind
 infixr 3 `<=<` `>=>`             -- Kleisli opeartors
 infixr 2 `:=` `=<<` `@` `seq`    -- so that in x@a:bs x is bound to the list
+infixl 2 either catch finally
 infixr 1 `$` `$!`
 
 --------------------------------------------------------------------------------
@@ -170,10 +171,10 @@ instance Eq Bool where
  * >constructor arg
  * where @arg@ is any frege value.
  *
- * Returns 0 for product types and native types or
- * the /constructor number/ for constructed types. The /constructor number/
- * is a small integer stored in every constructed value. It indicates by
- * what data constructor a value was constructed.
+ * Returns 0 for function types, product types and native types or
+ * the _constructor number_ for constructed types. The _constructor number_
+ * is a small integer associated with every constructed value. It indicates
+ * the data constructor a value was constructed with.
  *
  * The compiler assigns constructor numbers starting from 0 to the constructors
  * defined in a @data@ definition in the order of their appearance.
@@ -189,7 +190,7 @@ instance Eq Bool where
  * *Implementation specific:* This function is used in derived instances
  * of 'Eq' and 'Ord'.
  -}
-pure native constructor "frege.runtime.Runtime.constructor" :: a -> Int;
+pure native constructor "frege.runtime.Runtime.constructor" :: a -> Int
 
 -- ######## Java Boxed Types ####################
 -- data JBoolean   = native java.lang.Boolean
@@ -406,24 +407,24 @@ protected data StringJ a = native java.lang.String where
         >   Left exc -> ... // s is not well formed
         >   Right i  -> ... // the parsed value is in i
     -}
-    pure  native int    java.lang.Integer.parseInt   :: String  -> Exception Int
+    pure  native int    java.lang.Integer.parseInt   :: String  -> (NumberFormatException|Int)
     --- Safe way to parse a long integer from a string. See 'String.int'
-    pure  native long   java.lang.Long.parseLong     :: String  -> Exception Long
+    pure  native long   java.lang.Long.parseLong     :: String  -> (NumberFormatException|Long)
     --- Safe way to parse a 'Float' value from a string. See 'String.int'
-    pure  native float  java.lang.Float.parseFloat   :: String  -> Exception Float
+    pure  native float  java.lang.Float.parseFloat   :: String  -> (NumberFormatException|Float)
     --- Safe way to parse a 'Double' value from a string. See 'String.int'
-    pure  native double java.lang.Double.parseDouble :: String  -> Exception Double
+    pure  native double java.lang.Double.parseDouble :: String  -> (NumberFormatException|Double)
     --- Safe way to parse a big 'Integer' value from a string. See 'String.int'
-    pure  native integer new                         :: String  -> Exception Integer
+    pure  native integer new                         :: String  -> (NumberFormatException|Integer)
     --- retrieve character at index
     pure  native charAt :: String -> Int -> Char
     --- Get character at index.
     --- This will allow to use a string like an array, e.g. @"xyz".[1]@
     pure  native frozenGetAt  charAt :: String -> Int -> Char
     pure  native elemAt charAt :: String -> Int -> Char
-    --- interpret this string as regex (unsafe, does not catch exceptions)
-    --- see 'regcomp' for an alternative
-    pure  native compile java.util.regex.Pattern.compile :: String -> Regex
+    -- interpret this string as regex (unsafe, does not catch exceptions)
+    -- see 'regcomp' for an alternative
+    -- pure  native compile java.util.regex.Pattern.compile :: String -> Regex
     --- quote regular expression metacharacters in string
     pure  native quote   java.util.regex.Pattern.quote   :: String -> String
     --- quote replacement string metacharacters in string
@@ -441,7 +442,10 @@ protected data StringJ a = native java.lang.String where
     pure  native hashCode :: String -> Int
     --- see 'substr'
     pure native substr     substring :: StringJ a -> Int -> Int -> StringJ a
+    --- true if the second string is a prefix of the first one
     pure native startsWith           :: String -> String -> Bool
+    --- convert an 'Int' to a 'String'
+    pure native intToString java.lang.String.valueOf    :: Int -> String
 
 {--
      @substr s start end@ returns the sub string of @s@ that starts
@@ -464,8 +468,7 @@ pure native substr     substring :: StringJ a -> Int -> Int -> StringJ a
 -}
 pure native strtail        substring :: StringJ a -> Int -> StringJ a
 
---- compile a 'String' to a 'Regex'
-pure native regcomp        java.util.regex.Pattern.compile :: String -> Exception Regex
+
 atoi (s::String) = s.atoi
 
 
@@ -566,185 +569,6 @@ data Double = native double where
 
 
 {--
- *   'Regex' values are based on Java's @java.util.regex.Pattern@ objects.
- *   All regular expression literals are values of this type.
- -}
-data Regex = native java.util.regex.Pattern where
-    pure native pattern :: Regex -> String
-    --- create a 'Matcher' from a regular expression and a 'String'
-    pure native matcher :: Regex -> String -> Matcher
-    -- the following have been moved to Arrays
-    -- pure native split   :: Regex -> String -> StringArr
-    {-
-        Split a string around matches of a regular expression and return
-        the result as list of strings.
-    -}
-    -- splitted r s = (split r s).toList
-
-{--
-    'Matcher' values are based on Java's @java.util.regex.Matcher@ objects.
-    Code generation relies on the existence of this type and its operations.
-
-    The native 'Matcher' functions that correspond to java methods
-    of the @java.util.regex.Matcher@ class that modify the state of the
-    object they are invoked on
-    ('Matcher.find', 'Matcher.matches', 'Matcher.replaceFirst', 'Matcher.replaceAll',
-    'Matcher.usePattern', 'Matcher.useAnchoringBounds') are implemented
-    so that they make a copy of the 'Matcher' and invoke the impure java method
-    on the copy.
-
-    Frege 'Matcher's can thus be regarded as read-only values and
-    the functions defined here as pure. If you need to pass a 'Matcher' to
-    other native functions, be sure that the function is pure. If it is not
-    because it would modify the matcher, and you do not need the match result, always
-    pass a clone of the Matcher (see 'Matcher.clone')
-
--}
-data Matcher = pure native java.util.regex.Matcher where
-    pure  native clone frege.runtime.Regex.clone :: Matcher -> Matcher
-    {-- Tries a match and if it succeeds, returns @Just m@, where @m@ is
-     *  a new 'Matcher' that contains the result. If there is no match, @Nothing@
-     *  is returned.
-     *
-     *  The following java fragment appends all matched substrings of a string:
-     *  > String s = "cats and dogs are not concatenated.";
-     *  > Pattern p = Pattern.compile("cat|dog");
-     *  > String result = "";
-     *  > Matcher m = p.matcher(s);
-     *  > while (m.find()) result += m.group(0);  // "catdogcat"
-     *  The follwoing frege fragment computes the same result:
-        > result = loop m "" where
-        >      s = "cats and dogs are not concatenated."
-        >      p = #cat|dog#
-        >      m = p.matcher s
-        >      loop :: Matcher -> String -> String
-        >      loop m1 r | Just m2 <- m1.find = loop m2 (r++m2.match)
-        >                | otherwise = r
-     -}
-    pure  native find   frege.runtime.Regex.find :: Matcher -> Maybe Matcher
-    --- Tries to match the entire string and returns @Just m@ on success and otherwise @Nothing@.
-    pure  native matches frege.runtime.Regex.matches  :: Matcher -> Maybe Matcher
-    {--
-        Retrieves the input subsequence captured by the given group
-        during the previous match operation.
-
-        Capturing groups are indexed from left to right, starting at one.
-        Group zero denotes the entire pattern, so the expression @(m.group 0)@
-        retrieves that portion of the input string that was matched by the pattern.
-
-        If the match was successful but the group specified failed to match any
-        part of the input sequence, then 'Nothing' is returned. Note that some
-        groups, for example @(a?)@, match the empty string.
-        This functon will return @Just ""@ when such a group successfully
-        matches the empty string in the input.
-
-        The folloing property holds for a 'Matcher' /m/ with input
-        sequence /s/ and group index /g/:
-        > isJust (m.group g) ==> (m.group g) == Just (s.substr (m.start g) (m.end g))
-    -}
-    pure  native group                :: Matcher -> Int -> (Maybe String)
-    {--
-        @Matcher.match m@ returns the input subsequence matched by the previous match.
-        The result is 'undefined' if the last match was not successful.
-
-        For a 'Matcher' @m@ with input sequence @s@, the following holds:
-        > isJust (m.group 0) ==> unJust (m.group 0) == m.match
-
-        Note that some patterns, for example @a?@, match the empty string.
-        This method will return the empty string when the pattern successfully
-        matches the empty string in the input.
-    -}
-    pure  native match group          :: Matcher -> String
-
-    {--
-        Returns the start index of the subsequence captured by the
-        given group during the previous match operation where group 0 denotes
-        the entire pattern.
-
-        If the specified capturing group failed to match,
-        the return value will be -1.
-
-        The follwoing property holds:
-        > (m.group n == Nothing) ==> (m.start n < 0)
-    -}
-    pure  native start                :: Matcher -> Int -> Int
-
-    {--
-        Returns the offset after the last character of the subsequence
-        captured by the
-        given group during the previous match operation where group 0 denotes
-        the entire pattern.
-
-        If the specified capturing group failed to match,
-        the return value will be -1.
-
-        The follwoing property holds:
-        > (m.group n == Nothing) ==> (m.end n < 0)
-    -}
-    pure  native end                  :: Matcher -> Int -> Int
-
-    {--
-        Makes a new 'Matcher' and causes it to use a different 'Regex' for future matches.
-
-        The original matchers position in the input and its
-        last append position is copied, but information about the last match, if any,
-        is not.
-
-        This is most useful with patterns that start with the @\\G@ anchor.
-
-        Note that, due to a java bug, if the last find operation matched the empty string,
-        the next find will fail. For a workaround see 'Matcher.usePatternAndFind'
-    -}
-    pure  native usePattern frege.runtime.Regex.usePattern :: Matcher -> Regex -> Matcher
-
-    {--
-        Makes a new 'Matcher' with a different 'Regex' and tries to find a match.
-        If the last find on the original Matcher returned an empty result, it
-        calls @mnew.find(morig.end(0))@ to work around a bug in the java API.
-        Therefore, this function must only be used on a matcher whose last match
-        attempt was successful.
-    -}
-    pure  native usePatternAndFind frege.runtime.Regex.usePatternAndFind :: Matcher -> Regex -> Maybe Matcher
-
-    --- Requires or forbids the matcher to acknowledge anchors.
-    pure  native useAnchoringBounds frege.runtime.Regex.useAnchoringBounds :: Matcher -> Bool ->  Matcher
-
-    {--
-       Returns the string representation of this matcher.
-       The string representation of a 'Matcher' contains information
-       that may be useful for debugging. The exact format is unspecified.
-    -}
-    pure  native toString         :: Matcher -> String
-
-    {--
-       Replaces the first subsequence of the input sequence that matches
-       the pattern with the given replacement string.
-
-       This method scans the input sequence from the start
-       looking for a match of the pattern.
-       Characters that are not part of the match are appended directly
-       to the result string; the match is replaced in the result by the
-       replacement string. The replacement string may contain references
-       to captured subsequences.
-
-       Note that backslashes (\\) and dollar signs ($) in the replacement
-       string may cause the results to be different than if it were
-       being treated as a literal replacement string.
-       Dollar signs may be treated as references to captured subsequences
-       as described above, and backslashes are used to escape
-       literal characters in the replacement string.
-
-       Given the regular expression @#dog#@, the input @"zzzdogzzzdogzzz"@,
-       and the replacement string @"cat"@, an invocation of this function
-       on a matcher for that expression would yield the string
-       @"zzzcatzzzdogzzz"@.
-    -}
-    pure  native replaceFirst frege.runtime.Regex.replaceFirst :: Matcher -> String -> String
-
-    --- Like 'Matcher.replaceFirst', but replaces all matches.
-    pure  native replaceAll   frege.runtime.Regex.replaceAll   :: Matcher -> String -> String
-
-{--
     This type is used in code generation for the lazy versions of native methods,
     where single standing generic type variables appear.
     
@@ -759,32 +583,41 @@ data Matcher = pure native java.util.regex.Matcher where
     - @java.lang.Object@ is the natural type for this.   
     -}
 protected data AnonymousObject = pure native java.lang.Object where
-    pure native getClass   ::          AnonymousObject -> Class
+    --- for any value, we can get its @Java@ class
+    pure native getClass  frege.runtime.Runtime.getClass ::  a -> Class a
 
-{--
+{-- warning: probably catches more exceptions than you want to handle, use (Exception1|Exception2|Result)
     This is the principal return type for java methods that are expected to
     throw exceptions.
+    
+    It is strongly recommended to use more specific exception types.
  -}
-type Exception a = Either JException a
+type CatchAll  = Either Throwable
+--- warning: will be replaced soon, use 'CatchAll' if you must
+type Exception = CatchAll
 
 {--
  * We need to do some reflection from frege code.
  * For example, when we catch an 'JException' thrown from Java code.
  * we might want to know what it is.
  -}
-data Class = pure native java.lang.Class where
-    pure  native getName :: Class -> String
-    native       forName java.lang.Class.forName :: String -> IO (Exception (Class))
+data Class a = pure native java.lang.Class where
+    pure  native getName    :: Class a -> String
+    native       forName java.lang.Class.forName 
+                            :: String -> IO (ClassNotFoundException|Class a)
 
+--- warning: this type alias will be removed soon
+--- Backwards compatibility
+type JException = Throwable
 
---- Frege wrapper for java exceptions.
-data JException = pure native java.lang.Exception where
-    pure native getLocalizedMessage :: JException -> String
-    pure native getMessage ::          JException -> String
+--- Frege wrapper for java Throwables.
+protected data Throwable = pure native java.lang.Throwable where
+    pure native getLocalizedMessage :: Throwable -> String
+    pure native getMessage ::          Throwable -> String
     -- pure native getClass   ::          JException -> Class JException
     --- give the name of this exception
-    catched :: JException -> String
-    catched t = (t.getClass).getName
+    catched :: Throwable -> String
+    catched t = t.getClass.getName
 
 
 
@@ -850,43 +683,43 @@ pure native strictTuple26 PreludeBase.TTuple26.mk :: a -> b -> c -> d -> e -> f 
 
 
 
-{-
- * @(try f x)@  is like  @(f $ x)@
- * but catches all exceptions that are thrown in @f@. To be used like
- *
- * > case try f x of
- * >    Left exception -> ...
- * >    Right result   -> ...
- *
- * Note that 'try' is strict in both its arguments. The exceptions thrown
- * when the arguments are evaluated will *not* be catched.
- -}
--- pure native try "PreludeBase._dollar.w" :: (a -> b) -> a -> Exception b
-
-
 --- @a `seq` b@ evaluates _a_ before it returns _b_
 --- This is a right associative operator with precedence 15.
 seq !a b = b;
 
 --######### undefined things ####################
-
+--- An unchecked subclass of @java.lang.RunTimeException@ for the Frege Runtime
+--- An instance of 'Undefined' will be thrown if 'undefined' or ('error' msg) is evaluated.  
 data Undefined = pure native frege.runtime.Undefined where 
      pure  native new :: String -> Undefined
      --- create an 'Undefined' value from a string and a cause
-     pure  native newSX new :: String -> JException -> Undefined
+     pure  native newSX new :: String -> Throwable -> Undefined
      {-- create an 'Undefined' value from a 'JException'. The message
          will be taken from the exception.
          -}
-     newX :: JException -> Undefined
+     newX :: Throwable -> Undefined
      newX jex = newSX ((("caused by ".++ jex.getClass.getName).++ ": ").++ jex.getMessage) jex
      --- Throw this 'Undefined', this will abort the computation evaluating it.
      --- Actually, the return type is not correct, since it never returns.
      pure native die  :: Undefined -> Bool
 
+--- A subclass of 'Undefined', used to signal failed pattern matches
+data NoMatch     = pure native frege.runtime.NoMatch
+--- A subclass of 'Undefined', used to signal failed guards
+data GuardFailed = pure native frege.runtime.GuardFailed
+--- @java.lang.NumberFormatException@ needed for string conversion operations
+--- declared *@protected@* to avoid name conflicts with @frege.java.lang.NumberFormatException@ 
+protected data NumberFormatException = pure native java.lang.NumberFormatException
+--- Forward declaration of @java.lang.ClassNotFoundException@
+ protected data ClassNotFoundException 
+    = pure native java.lang.ClassNotFoundException
+
 --- This is the standard undefined value.
 undefined :: u
 undefined = error "undefined"
+
 --- Construct an undefined value with an informative message.
+--- When evaluated, an 'Undefined' exception will be thrown.
 error :: String -> u
 error s   = if (Undefined.new s).die then error "a" else error "b"
 --- Constructs an undefined value from a java exception and throws it.
@@ -1099,17 +932,31 @@ class Enum Ord e => e where
     pred :: e -> e
     -- pred x = from (ord x - 1)
     -- succ x = from (ord x + 1)
-    {-- @a .. b@ is the list @[a, succ a, succ (succ a), ..., b ]@
+    {- @a .. b@ is the list @[a, succ a, succ (succ a), ..., b ]@
      * if @a < b@, or [a] if @a == b@ or the empty list if @a > b@.
-     -}
+     
     (..) :: e -> e -> [e]
     (a) .. (b)
         | a < b     = a:(succ a). .. b
         | a == b    = [a]
-        | otherwise = []
+        | otherwise = []    -}
     --- default implementation for 'Eq.hashCode' is same as 'ord'
-    hashCode = ord        
+    hashCode = ord
+    --- used in translating @[n,n'..m]
+    enumFromThenTo :: e -> e -> e -> [e]
+    --- used in translating @[n,n'..]
+    enumFromThen :: e -> e -> [e]
+    --- used in translating @[n..m]
+    enumFromTo :: e -> e -> [e]
+    enumFromTo a b
+        | a < b     = a:enumFromTo (succ a) b
+        | a == b    = [a]
+        | otherwise = []
+    --- used in translating @[n..]
+    enumFrom :: e -> [e]
+    enumFrom a = enumFromThen a (succ a)
 
+  
 instance Eq () where
     () != () = false
     () == () = true
@@ -1216,6 +1063,25 @@ instance Enum Integer where
     ord b  = b.int
     --- @Integer.from i@ is the same as @Int.big i@
     from i = i.big
+    enumFromTo a b
+        | a < b     = a:enumFromTo (succ a) b
+        | a == b    = [a]
+        | otherwise = []
+    enumFrom !a        = a : enumFrom (succ a)
+    enumFromThen !a !b = goFromBy a (b-a)
+        where
+            goFromBy :: Integer -> Integer -> [Integer]
+            goFromBy !a !inc = a : goFromBy (a+inc) inc
+    enumFromThenTo !a !b c = if a<b && a<=c || a>b && a>=c
+                                then goFromByTo a (b-a) c
+                                else []
+        where
+            goFromByTo !a inc c
+                | inc > 0n, a < c, (c-a) < inc = [a]
+                | a == c                       = [a]
+                | inc < 0n, a > c, (c-a) > inc = [a]
+                | otherwise                    = a : goFromByTo (a+inc) inc c  
+
 ;
 {--
  * 'Integer' is an instance of 'Integral'
@@ -1438,6 +1304,22 @@ instance Enum Int where
     succ i
         | i < Int.maxBound = i+1
         | otherwise = error "succ Int.maxBound"
+    enumFromTo a b
+        | a < b     = a:enumFromTo (succ a) b
+        | a == b    = [a]
+        | otherwise = []
+    enumFrom a       = enumFromTo a maxBound
+    enumFromThen !a !b = enumFromThenTo a b (if a<b then maxBound else minBound)
+    enumFromThenTo !a !b c = if a<b && a<=c || a>b && a>=c
+                                then goFromByTo a (b-a) c
+                                else []
+        where
+            goFromByTo !a inc c
+                | inc > 0, a < c, (c-a) < inc = [a]
+                | a == c                      = [a]
+                | inc < 0, a > c, (c-a) > inc = [a]
+                | otherwise                   = a : goFromByTo (a+inc) inc c  
+        
 
 
 instance Bounded Long where
@@ -1463,6 +1345,22 @@ instance Enum Long where
     succ i
         | i < Long.maxBound = i+1L
         | otherwise = error "succ Long.maxBound"
+    enumFromTo a b
+        | a < b     = a:enumFromTo (succ a) b
+        | a == b    = [a]
+        | otherwise = []
+    enumFrom a       = enumFromTo a maxBound
+    enumFromThen !a !b = enumFromThenTo a b (if a<b then maxBound else minBound)
+    enumFromThenTo !a !b c = if a<b && a<=c || a>b && a>=c
+                                then goFromByTo a (b-a) c
+                                else []
+        where
+            goFromByTo !a inc c
+                | inc > 0L, a < c, (c-a) < inc = [a]
+                | a == c                      = [a]
+                | inc < 0L, a > c, (c-a) > inc = [a]
+                | otherwise                   = a : goFromByTo (a+inc) inc c  
+
 
 
 
@@ -1516,6 +1414,16 @@ instance Enum Bool where
     pred _    = error "pred false"
     succ false = true
     succ true  = error "succ true"
+    enumFromTo a b = case a <=> b of
+        Lt -> [a,b]
+        Eq -> [a]
+        Gt -> []
+    enumFromThen a b 
+        | a != b    = [a,b]
+        | otherwise = []
+    enumFromThenTo a b _ =  enumFromThen a b
+    enumFrom false = [false,true]
+    enumFrom true  = [true]        
 
 
 --############## String instances ###############
@@ -1565,6 +1473,22 @@ instance Enum Char where
     pure native from       "(char)" :: Int -> Char
     pred c = Char.from (Char.ord c - 1)
     succ c = Char.from (Char.ord c + 1)
+    enumFromTo a b
+        | a < b     = a:enumFromTo (succ a) b
+        | a == b    = [a]
+        | otherwise = []
+    enumFrom a       = enumFromTo a maxBound
+    enumFromThen !a !b = enumFromThenTo a b (if a<b then maxBound else minBound)
+    enumFromThenTo !a !b c = if a<b && a<=c || a>b && a>=c
+                                then goFromByTo (ord a) (ord b - ord a) (ord c)
+                                else []
+        where
+            goFromByTo !a inc c
+                | inc > 0, a < c, (c-a) < inc = [Char.from a]
+                | a == c                      = [Char.from a]
+                | inc < 0, a > c, (c-a) > inc = [Char.from a]
+                | otherwise                   = Char.from a : goFromByTo (a+inc) inc c  
+
 
 chr i = Char.from i
 
@@ -1670,89 +1594,14 @@ data Either a b = Left a | Right b
 -- derive Ord  Either a b
 -- derive Show Either a b
 
+--- apply first function to value in 'Left' or second function to value in 'Right'
 either left right (Left x)  = left x
 either left right (Right x) = right x
 
 
-
-
-
-{--
- * > string =~ regex
- * tries to match _string_ against _regex_ and returns
- * @Just matcher@ if it succeeds, @Nothing@ otherwise.
- -}
-(s) =~ (p::Regex) = (p.matcher s).find
-
-{--
- * >string ~ regex
- * @true@ if _string_ matches _regex_, @false@ otherwise
- -}
-(s) ~ (p::Regex) = case (p.matcher s).find of
-    Just _  -> true
-    Nothing -> false
-
-{--
- * > s !~ p == !(s ~ p)
- -}
-(s) !~ (p) = !(s ~ p)
-
-{--
- * > ("string" ~~ #r??#) == Just "rin"
- * Tries a match and returns @Just x@ where
- * _x_ is the matched substring or @Nothing@ if there was no match.
- *
- -}
-s ~~ r =
-    case s =~ r of
-        Just m -> m.group 0
-        Nothing -> Nothing
-
-
-{--
- * > string ~~~ regex
- * Matches _string_ with _regex_ and returns a function
- * that can be used to extract the matched part of the string and the
- * captured substrings.
- * >   let f = "frege" ~~~ #(..).(..)#
- * >   in [ f i | i <- 0..3 ]
- * yields
- * >[Just "frege", Just "fr", Just "ge", Nothing]
- -}
-s ~~~ r =
-    case s =~ r of
-        Just m  -> m.group
-        Nothing -> const Nothing
-
-{--
- * @m ?~ p@ binds pattern _p_ to the matcher _m_
- * and tries a match. There must have been a successful
- * match on _m_ before.
-
- * Returns 'Nothing' if match fails, else ('Just' @m@).
-
- * This function is most usefull in conjunction with patterns that
- * use the G-anchor when one wants to extract
- * multiple differnt adjacent items from a string.
- 
- -}
-(m::Matcher) ?~ (p) =  m.usePatternAndFind p
-
-{--
- * > m /~ p
- * is like
- * > m ?~ p
- * but instead of the
- * matcher it returns the matched string, if any.
- -}
-(m) /~ (p) = case m ?~ p of
-        Just m  -> Matcher.group m 0
-        Nothing -> Nothing
-
-
-
 --- return the first element of a 2-tuple
 fst (a, _) = a
+
 --- return the second element of a 2-tuple
 snd (_, a) = a
 
@@ -1767,7 +1616,7 @@ snd (_, a) = a
 {- more tuple stuff in Tuples.fr -}
 
 -- function stuff
-{--
+{-- warning: deprecated, do not use anymore
     Function composition.
 
     @(f <~ g)@ is a function whose argument is
@@ -1815,7 +1664,7 @@ uncurry f (a,b) = f a b
 --- @curry f@ passes the next two arguments as 2-tuple to _f_
 curry f a b = f (a,b)
 
---- Another operator for function composition, which is identical to '<~'
+--- Function composition
 --- > (f • g) a = f (g a)
 (•) = \f\g\a -> f (g a)
 
@@ -1823,7 +1672,7 @@ curry f a b = f (a,b)
 --- > f (x@a:as) = e
 --- is the same as
 --- > f arg = case arg of { x -> case x of { a:as -> e }}
-(@) = (•)
+(@) = \_ \_ -> ()
 
 
 {--
@@ -1864,12 +1713,14 @@ descending f a b =  f b <=> f a
  * Every state thread is independend of each other and keeps track of mutable variables
  * created in it. For detailed information, read the paper _Lazy Functional State Threads_.
 
- * Every mutable native data type will have a phantom type paramter @s@
- * that tells to what state thread the value belongs. For example, the @new@ method of
+ * Every mutable native data type shall be wrapped in a 'Mutable' 
+ * with phantom type paramter @s@.
+ * that tells to what state thread the value belongs. 
+ * For example, the @new@ method of
  * the java class @java.util.Date@ could be accessed like this:
 
  > data Date s = native java.util.Date where
- >     native new :: () -> ST s (Date s)
+ >     native new :: Long -> ST s (Mutable s Date)
 
  * Inside ST actions, Date values can be created and manipulated with
  * impure native methods at will. However, such a value can never escape
@@ -1878,13 +1729,14 @@ descending f a b =  f b <=> f a
  * Because @ST s@ is an instance of 'Monad', ST actions can be combined, which
  * ensures sequenced execution. For example, we could add another method
  * to the Date type that converts the date to a string:
- * >     native toString :: Date s -> ST s String
+ * >     native toString :: Mutable s Date -> ST s String
  * and a computation which yields the current time in string form:
- * > now = do
- * >    date <- Date.new ()
+ * > epoch = do
+ * >    date <- Date.new 0L
  * >    return date.toString
- * This looks almost like java already! @now@ has type @ST s String@ and we can run
- * the computation with @now.run@ (see 'ST.run' below), which gives us a nice, pure, immutable,
+ * This looks almost like java already! @epoch@ has type @ST s String@ and we can run
+ * the computation with @epoch.run@ (see 'ST.run' below), 
+ * which gives us a nice, pure, immutable,
  * functional correct 'String' value.
 
  * The 'IO' type is just an alias for 'ST' 'RealWorld', and can be thought of as
@@ -1931,7 +1783,7 @@ abstract data ST s a = ST (s -> a)  where
  -}
 abstract data RealWorld = RealWorld
 
-{--
+{-- warning: do not use anymore
  * Some native values can be detached from the stateful realm so as to make it possible
  * to apply them to pure (native) functions, see 'Freezable'.
  *
@@ -1940,8 +1792,10 @@ abstract data RealWorld = RealWorld
 abstract data Immutable = Immutable
 --- @IO a@ is an abbrevation for 'ST' 'RealWorld' @a@
 type IO = ST RealWorld
+--- warning: do not use anymore
 --- @Mutable MyType s@ is an abbrevation for 'ST' @s (MyType s)@
 type Mutable n s = ST s (n s)
+--- warning: do not use anymore
 --- @Frozen MyType@ is an abbrevation for @MyType Immutable@
 type Frozen  n = n Immutable
 
