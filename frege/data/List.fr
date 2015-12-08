@@ -1,8 +1,8 @@
 {-
     Copyright © 2011 - 2015, Ingo Wechsung
- 
+
     All rights reserved.
- 
+
     Redistribution and use in source and binary forms, with or
     without modification, are permitted provided that the following
     conditions are met:
@@ -17,7 +17,7 @@
         nor the names of its contributors may be used to endorse or
         promote products derived from this software without specific
         prior written permission.
- 
+
     *THIS SOFTWARE IS PROVIDED BY THE
     COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
     IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -34,14 +34,14 @@
 -}
 
 {--
- 
+
     This package provides common list functions for the Frege language.
-    
-    It contains all functions described in chapter 20 "Data.List" of the 
+
+    It contains all functions described in chapter 20 "Data.List" of the
     _Haskell 2010 Language Report_. Where possible, the code has been ported
-    from public Haskell source code 
+    from public Haskell source code
     (http://www.haskell.org/ghc/docs/latest/html/libraries/base/src/Data-List.html).
-   
+
  -}
 
 {-
@@ -52,11 +52,11 @@
 -}
 
 
-package Data.List 
+package Data.List
     inline (sort,
             delete, insert, deleteFirstsBy, \\, union, intersect) where
 
---import frege.Prelude 
+--import frege.Prelude
 import frege.prelude.PreludeList public (intersperse)
 
 -- 'intersperse' is in PreludeList, but if someone needs to export it from here ...
@@ -126,7 +126,7 @@ unfoldr f b  =
 -- inits                   :: [a] -> [[a]]
 inits (x:xs)            =  [[]] ++ map (x:) (inits xs)
 inits _                 =  [[]]
-    
+
 
 {--
     The 'tails' function returns all final segments of the argument,
@@ -152,7 +152,7 @@ takeUntil p _      = []
     -}
 dropUntil p (list@(x:xs)) = if p x then list else dropUntil p xs
 dropUntil p _             = []
-    
+
 {--
     @group xs@ returns a list of sub-lists made of adjacent equal elements in @xs@.
     All sublist are not empty and their concatenation yields again @xs@.
@@ -178,13 +178,13 @@ lookup key ((a,b):as)
 lookup key []   = Nothing
 
 {--
-    'delete' @x@ removes the first occurrence of @x@ from its list argument. 
+    'delete' @x@ removes the first occurrence of @x@ from its list argument.
     For example,
-    
+
     > delete ’a’ "banana" == "bnana"
 
     It is a special case of 'deleteBy', which allows the programmer to supply their own equality test.
-    
+
     -}
 delete =  deleteBy (==)
 
@@ -213,7 +213,7 @@ insert e ls = insertBy (<=>) e ls
 
 --- The non-overloaded version of 'insert'.
 insertBy cmp x [] = [x]
-insertBy cmp x (ys@y:ys') = case  x `cmp` y of 
+insertBy cmp x (ys@y:ys') = case  x `cmp` y of
      Gt ->  y : insertBy cmp x ys'
      _  ->  x : ys
 
@@ -224,7 +224,7 @@ infix  14 `\\`
     @ys@ in turn (if any) has been removed from @xs@.  Thus
 
     > (xs ++ ys) \\ xs == ys.
-    
+
     It is a special case of 'deleteFirstsBy', which allows the programmer
     to supply their own equality test.
     -}
@@ -234,13 +234,13 @@ infix  14 `\\`
 {--
     The 'union' function returns the list union of the two lists.
     For example,
-    
+
     > "dog" `union` "cow" == "dogcw"
 
     Duplicates, and elements of the first list, are removed from the
     the second list, but if the first list contains duplicates, so will
     the result.
-    
+
     It is a special case of 'unionBy', which allows the programmer to supply
     their own equality test.
     -}
@@ -272,7 +272,7 @@ intersectBy eq xs ys    =  [x | x <- xs, any (eq x) ys]
 {--
     'unique' removes duplicate elements from an unsorted list,
     which may or may not be faster than using @(uniq • sort)@
-    
+
     This function is known as @nub@ in Haskell and Prelude provides this as alias.
 
     However, the following holds
@@ -282,7 +282,7 @@ unique (e:es) = e : unique (filter (e !=) es)
 unique _ = []
 
 nub = unique
-nubBy = uniqueBy    
+nubBy = uniqueBy
 
 {--
     @uniqueBy f@ is a more general form of 'unique',
@@ -329,7 +329,7 @@ uniqBy eq _      = []
 
     The order of the elements of _xs_ is reversed in the results.
     The argument must be finite, it is processed in a tail recursive loop.
-    
+
     See also 'partition', which is lazy and works on infinite lists, but may be slower
     on finite lists because it processes the argument twice.
 
@@ -350,13 +350,13 @@ partitioned p lst = loop lst [] [] where
 
 {--
      A variant of 'partition' that satisfies the Haskell 2010 specification.
-    When the order of the results is irrelevant or one actually wants the results reversed, 
+    When the order of the results is irrelevant or one actually wants the results reversed,
     consider the more efficient 'partitioned'.
-    -}     
+    -}
 partition p lst = (filter p lst, filter (not • p) lst)
 
 {--
-    @intercalate xs xss@ is equivalent to @concat (intersperse xs xss)@    
+    @intercalate xs xss@ is equivalent to @concat (intersperse xs xss)@
     -}
 intercalate xs xss = concat (intersperse xs xss)
 
@@ -365,7 +365,7 @@ zip4 (a:as) (b:bs) (c:cs) (d:ds) = (a,b,c,d):zip4 as bs cs ds
 zip4 _ _ _ _ = []
 
 --- 'unzip4' unzips a list of quadrupels and returns a quadrupel of lists.
-unzip4    =  foldr (\(a,b,c,d) \(as,bs,cs,ds) -> (a:as,b:bs,c:cs,d:ds)) ([];[];[];[])    
+unzip4    =  foldr (\(a,b,c,d) \(as,bs,cs,ds) -> (a:as,b:bs,c:cs,d:ds)) ([];[];[];[])
 
 
 --- 'zipWith4' /f/ zips 4 lists with function /f/ instead of the standard '(,,,)' that is used by 'zip4'
@@ -373,16 +373,16 @@ zipWith4 f (a:as) (b:bs) (c:cs) (d:ds) = f a b c d:zipWith4 f as bs cs ds
 zipWith4 f _ _ _ _ = []
 
 --- 'zip5' zips 5 lists in the same way as 'zip' does it.
-zip5 (a:as) (b:bs) (c:cs) (d:ds) (e:es) 
+zip5 (a:as) (b:bs) (c:cs) (d:ds) (e:es)
     = (a,b,c,d,e):zip5 as bs cs ds es
 zip5 _ _ _ _ _ = []
 
 --- 'unzip5' unzips a list of quintupels and returns a quintupel of lists.
-unzip5    =  foldr (\(a,b,c,d,e) \(as,bs,cs,ds,es) 
-                    -> (a:as,b:bs,c:cs,d:ds,e:es)) ([];[];[];[];[])    
+unzip5    =  foldr (\(a,b,c,d,e) \(as,bs,cs,ds,es)
+                    -> (a:as,b:bs,c:cs,d:ds,e:es)) ([];[];[];[];[])
 
 --- 'zipWith5' /f/ zips 5 lists with function /f/ instead of the standard '(,,,,)' that is used by 'zip5'
-zipWith5 f (a:as) (b:bs) (c:cs) (d:ds) (e:es) 
+zipWith5 f (a:as) (b:bs) (c:cs) (d:ds) (e:es)
     = f a b c d e:zipWith5 f as bs cs ds es
 zipWith5 f _ _ _ _ _ = []
 
@@ -392,8 +392,8 @@ zip6 (a:as) (b:bs) (c:cs) (d:ds) (e:es) (f:fs)
 zip6 _ _ _ _ _ _  = []
 
 --- 'unzip6' unzips a list of sextupels and returns a sextupel of lists.
-unzip6    =  foldr (\(a,b,c,d,e,f) \(as,bs,cs,ds,es,fs) 
-                  -> (a:as,b:bs,c:cs,d:ds,e:es,f:fs)) ([];[];[];[];[];[])    
+unzip6    =  foldr (\(a,b,c,d,e,f) \(as,bs,cs,ds,es,fs)
+                  -> (a:as,b:bs,c:cs,d:ds,e:es,f:fs)) ([];[];[];[];[];[])
 
 --- 'zipWith6' /f/ zips 6 lists with function /f/ instead of the standard '(,,,,,)' that is used by 'zip6'
 zipWith6 h (a:as) (b:bs) (c:cs) (d:ds) (e:es) (f:fs)
@@ -406,8 +406,8 @@ zip7 (a:as) (b:bs) (c:cs) (d:ds) (e:es) (f:fs) (g:gs)
 zip7 _ _ _ _ _ _ _ = []
 
 --- 'unzip7' unzips a list of septupels and returns a septupel of lists.
-unzip7    =  foldr (\(a,b,c,d,e,f,g) \(as,bs,cs,ds,es,fs,gs) 
-                  -> (a:as,b:bs,c:cs,d:ds,e:es,f:fs,g:gs)) ([];[];[];[];[];[];[])    
+unzip7    =  foldr (\(a,b,c,d,e,f,g) \(as,bs,cs,ds,es,fs,gs)
+                  -> (a:as,b:bs,c:cs,d:ds,e:es,f:fs,g:gs)) ([];[];[];[];[];[];[])
 
 --- 'zipWith7' /f/ zips 7 lists with function /f/ instead of the standard '(,,,,,,)' that is used by 'zip7'
 zipWith7 h (a:as) (b:bs) (c:cs) (d:ds) (e:es) (f:fs) (g:gs)
@@ -430,11 +430,25 @@ sortBy f as = sortBy' f (toList as) where
             splitted [] = ([],[])
             splitted xs = (take n2 xs; drop n2 xs) where n2 = length xs `quot` 2
 
-{-- 
+{--
+   Sort a list by comparing the results of a key function applied to each
+   element.  @sortOn f@ is equivalent to @sortBy (comparing f)@, but has the
+   performance advantage of only evaluating @f@ once for each element in the
+   input list.  This is called the decorate-sort-undecorate paradigm, or
+   Schwartzian transform.
+
+   Example:
+   > sortOn negate [1,2,3] => [3,2,1]
+   -}
+sortOn :: Ord b => (a -> b) -> [a] -> [a]
+sortOn f =
+  map snd . sortBy (comparing fst) . map (\x -> let y = f x in y `seq` (y, x))
+
+{--
     Merge two lists, taking elements from the left as long as
     they are not 'Gt' (according to the passed comparison function)
     than the head element from the right.
-    
+
     Makes most sense when the lists are sorted by the same criteria.
     -}
 merge !by [] x = x
@@ -443,11 +457,11 @@ merge !by (ass@a:as) (bss@b:bs) = case a `by` b of
     Gt -> b : merge by ass bs
     _  -> a : merge by as  bss
 
-{-- 
-    Standard sort uses operator '<=>' and demands that the type of 
+{--
+    Standard sort uses operator '<=>' and demands that the type of
     the list elements is an instance of 'Ord'
     -}
-sort = sortBy (<=>)        
+sort = sortBy (<=>)
 
 
 --- The 'transpose' function transposes the rows and columns of its argument.
@@ -464,7 +478,7 @@ transpose []             = []
 subsequences xs         =  [] : nonEmptySubsequences xs
 
 {--
-    The 'nonEmptySubsequences' function returns the list of all subsequences 
+    The 'nonEmptySubsequences' function returns the list of all subsequences
     of the argument, except for the empty list.
     > nonEmptySubsequences "abc" == ["a","b","ab","c","ac","bc","abc"]
     -}
@@ -483,17 +497,17 @@ permutations xs0  =  xs0 : perms xs0 [] where
             interleave' f (y:ys) r = let (us,zs) = interleave' (f • (y:)) ys r
                                      in  (y:us, f (t:y:us) : zs)
 
-{-- 
+{--
     The 'mapAccumL' function behaves like a combination of 'map' and
     'fold'; it applies a function to each element of a list, passing
     an accumulating parameter from left to right, and returning a final
     value of this accumulator together with the new list.
     -}
-mapAccumL ::  
+mapAccumL ::
           (acc -> x -> (acc, y)) -- Function of elt of input list
                                     -- and accumulator, returning new
                                     -- accumulator and elt of result list
-          -> acc            -- Initial accumulator 
+          -> acc            -- Initial accumulator
           -> [x]            -- Input list
           -> (acc, [y])     -- Final accumulator and result list
 mapAccumL f s (x:xs)    =  (s'',y:ys)
@@ -506,7 +520,7 @@ mapAccumL _ s []        =  (s, [])
     an accumulating parameter from right to left, and returning a final
     value of this accumulator together with the new list.
     -}
-mapAccumR :: 
+mapAccumR ::
              (acc -> x -> (acc, y))     -- Function of elt of input list
                                         -- and accumulator, returning new
                                         -- accumulator and elt of result list
@@ -549,6 +563,20 @@ isSuffixOf              :: (Eq a) => [a] -> [a] -> Bool
 isSuffixOf x y          =  reverse x `isPrefixOf` reverse y
 
 {--
+    The 'isSubsequenceOf' takes two lists and returns 'True' if the
+    first list is a subsequence of the second list.
+
+    Example:
+    > isSubsequenceOf ['a','d'..'z'] ['a'..'z'] == True
+    > isSubsequenceOf [1..10] [10,9..0] == False
+    -}
+isSubsequenceOf :: (Eq a) => [a] -> [a] -> Bool
+isSubsequenceOf []    _                    = True
+isSubsequenceOf _     []                   = False
+isSubsequenceOf (a@(x:a')) (y:b) | x == y    = isSubsequenceOf a' b
+                                 | otherwise = isSubsequenceOf a b
+
+{--
     The 'isInfixOf' function takes two lists and returns @true@
     iff the first list is contained, wholly and intact,
     anywhere within the second.
@@ -561,7 +589,7 @@ isSuffixOf x y          =  reverse x `isPrefixOf` reverse y
 isInfixOf               :: (Eq a) => [a] -> [a] -> Bool
 isInfixOf needle haystack = any (isPrefixOf needle) (tails haystack)
 
-{-- 
+{--
     The 'elemIndex' function returns the index of the first element
     in the given list which is equal (by '==') to the query element,
     or 'Nothing' if there is no such element.
@@ -584,7 +612,7 @@ elemIndices x   = findIndices (x==)
 find            :: (a -> Bool) -> [a] -> Maybe a
 find p          = listToMaybe • filter p
 
-{-- 
+{--
     The 'findIndex' function takes a predicate and a list and returns
     the index of the first element in the list satisfying the predicate,
     or 'Nothing' if there is no such element.
@@ -634,7 +662,7 @@ genericDrop _ []        =  []
 genericDrop n (_:xs)    =  genericDrop (n-one) xs
 
 
-{-- 
+{--
     The 'genericSplitAt' function is an overloaded version of 'splitAt', which
     accepts any 'Integral' value as the position at which to split.
     -}
@@ -662,7 +690,6 @@ genericIndex _ _      = error "List.genericIndex: index too large."
 genericReplicate        :: (Integral i) => i -> a -> [a]
 genericReplicate n x    =  genericTake n (repeat x)
 
-
 {--
     @xs !! n@ is the element with index _n_ of the list _xs_,
     where the head element of a list has index 0.
@@ -672,4 +699,3 @@ genericReplicate n x    =  genericTake n (repeat x)
 (_:_)  !! n         = error ("Data.List.!!: negative index ("     ++ String.intToString n ++ ")")
 []     !! n         = error ("Data.List.!!: empty list indexed (" ++ String.intToString n ++ ")")
 infixl 16 `!!`
-

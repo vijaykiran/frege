@@ -41,11 +41,11 @@
 
 package tests.qc.PreludeProperties where
 
-import Data.List 
+import Data.List
 
 import frege.prelude.Math (floor)
 -- import Test.QuickCheckArbitrary ()
-import Test.QuickCheck 
+import Test.QuickCheck
 
 trivial = (`classify` "trivial")
 
@@ -241,10 +241,9 @@ p_All = forAll lists (\xs -> trivial (null xs) $
 
 p_takeDrop = forAll lists (\xs -> property (\n ->
         classify (null xs) "empty list" $
-        classify (n < 0) "not applicable due to negative n" $
         classify (n == 0) "zero n" $
         classify (n >= length xs) "whole list" $
-        (n >= 0 ==> take n xs ++ drop n xs == xs)))
+        (take n xs ++ drop n xs == xs)))
 
 p_takeDropW = forAll lists (\xs ->
         classify (null xs) "empty list" $
@@ -266,8 +265,8 @@ p_Span = forAll lists (\xs ->
         (span f xs == (takeWhile f xs, dropWhile f xs)))
     where  f i = i `mod` 5 != 0
 
-p_Chunk = forAll lists (\xs -> 
-        property (\n -> 
+p_Chunk = forAll lists (\xs ->
+        property (\n ->
             n != 0 ==> concat (chunked (abs n) xs) == xs))
 
 p_Elem = forAll lists (\es -> property (\e ->
@@ -285,7 +284,7 @@ p_UniqueBy = forAll ssLists (\es -> trivial (null es) $
     sortBy (comparing fst) (uniqueBy (using fst) es) == uniqBy (using fst) (sortBy (comparing fst) es))
 
 p_Sort = forAll ssLists (\xs -> case uniqueBy (using fst) xs of {
-    ss -> sortBy (ascending fst) ss == reverse (sortBy (descending fst) ss)}) 
+    ss -> sortBy (ascending fst) ss == reverse (sortBy (descending fst) ss)})
 
 p_Partition = forAll lists (\xs -> let ps = partitioned p xs in
         classify (null (fst ps)) "empty left partition" $
@@ -315,23 +314,23 @@ p_DataList = property (and [uniqueBy (==) "abrakadabra".toList == "abrkd".toList
                 ])
 p_listDiff = property difflaw where
     difflaw :: [Char] -> [Char] -> Bool
-    difflaw xs ys = 
+    difflaw xs ys =
         (xs ++ ys) \\ xs == ys
 
 --- 'comparing' _f_ is the same as ('<=>') `'on'` _f_
 p_comparingOn = property p where
     p :: Int -> Int -> Bool
     p a b = comparing negate a b == ((<=>) `on` negate) a b
-    
+
 p_True = once true
-         
+
 main _ = do
         -- stop at first failed test
         allSingle  <- foldM (checkAnd 1) true singleChecks
         allLaws   <- foldM (checkAnd 500) true laws
         allChecks <- foldM (checkAnd 500) allLaws checks
         shrtChcks <- foldM (checkAnd 100) allChecks shortChecks
-        if (allSingle && allLaws && allChecks && shrtChcks) 
+        if (allSingle && allLaws && allChecks && shrtChcks)
           then println "All tests passed."
           else System.exit 1
     where
